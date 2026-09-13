@@ -132,6 +132,10 @@ async function seedRadar() {
   await seedRadarData("Wonderful");
   await runRadarScan("Wonderful");
   console.log("Seeded External Radar data.");
+  // The one real, live-data company (see radarAgent.ts) — seeded up front so
+  // it's visible without waiting for the next scheduled tick.
+  await runRadarScan();
+  console.log("Ran initial live-source Radar scan.");
 }
 
 async function seedJobs() {

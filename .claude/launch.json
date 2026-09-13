@@ -6,6 +6,12 @@
       "runtimeExecutable": "C:\\Users\\Gutit\\AppData\\Local\\Programs\\nodejs-portable\\node.exe",
       "runtimeArgs": ["node_modules/next/dist/bin/next", "dev"],
       "port": 3000
+    },
+    {
+      "name": "wonderful-intelligence-prod",
+      "runtimeExecutable": "C:\\Users\\Gutit\\AppData\\Local\\Programs\\nodejs-portable\\node.exe",
+      "runtimeArgs": ["node_modules/next/dist/bin/next", "start"],
+      "port": 3000
     }
   ]
 }

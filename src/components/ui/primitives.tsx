@@ -47,6 +47,14 @@ export function ConfidenceBadge({ level }: { level: "LOW" | "MEDIUM" | "HIGH" })
   return <Badge tone={tone}>{level === "HIGH" ? "High confidence" : level === "MEDIUM" ? "Medium confidence" : "Low confidence"}</Badge>;
 }
 
+export function LiveBadge() {
+  return (
+    <span className="inline-flex items-center gap-1 rounded-full border border-emerald-300 bg-emerald-50 px-2 py-0.5 text-[10px] font-semibold uppercase tracking-wide text-emerald-700">
+      Live data
+    </span>
+  );
+}
+
 export function DemoBadge() {
   return (
     <span className="inline-flex items-center gap-1 rounded-full border border-dashed border-black/20 px-2 py-0.5 text-[10px] font-semibold uppercase tracking-wide text-black/50">

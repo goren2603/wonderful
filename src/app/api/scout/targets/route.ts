@@ -1,13 +1,19 @@
 import { NextResponse } from "next/server";
 import { db } from "@/lib/db";
 import { dedupeCompany } from "@/lib/scoutScoring";
+import { fetchLiveEvidence } from "@/lib/research";
 
 // Manual intake for a REAL target: a real company and, optionally, a real
 // named person you already know (your own contact, or one you've found).
-// This does not invent research — no evidence is attached automatically. It
-// creates a real prospect/decision-maker record and a starter outreach
-// draft you (or a connected research pass) can refine before anything is
-// ever sent, which stays approval-gated like every other draft.
+// This does not invent research — nothing here is fabricated. It does fetch
+// real, live evidence for the named company from two keyless public APIs
+// (Wikipedia, Hacker News) and attaches whatever real, verifiable results
+// come back (isDemo=false, each with its real source URL) — it can come back
+// empty for a company with little public footprint, which is left as-is, not
+// backfilled with anything synthetic. It creates a real prospect/decision-
+// maker record and a starter outreach draft you (or a connected research
+// pass) can refine before anything is ever sent, which stays approval-gated
+// like every other draft.
 export async function POST(req: Request) {
   const body = await req.json().catch(() => ({}));
   const companyName = (body.companyName as string | undefined)?.trim();
@@ -25,13 +31,28 @@ export async function POST(req: Request) {
   if (email && !/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email)) return NextResponse.json({ error: "email is not valid" }, { status: 400 });
 
   const dedupeKey = dedupeCompany(companyName, country);
+  const liveEvidence = await fetchLiveEvidence(companyName);
   try {
     const result = await db.$transaction(async (tx) => {
       const prospect = await tx.prospect.upsert({
         where: { dedupeKey },
         update: {},
-        create: { companyName, dedupeKey, country, vertical, status: "NEW", whyJson: JSON.stringify(["Manually added as a real target — not from the demo discovery directory."]) },
+        create: {
+          companyName,
+          dedupeKey,
+          country,
+          vertical,
+          status: "NEW",
+          whyJson: JSON.stringify([
+            "Manually added as a real target — not from the demo discovery directory.",
+            liveEvidence.length ? `${liveEvidence.length} real, live evidence item(s) fetched at intake (Wikipedia/Hacker News) — see Evidence below.` : "No live public evidence found for this name at intake (Wikipedia/Hacker News returned nothing).",
+          ]),
+        },
       });
+      for (const item of liveEvidence) {
+        const exists = await tx.evidence.findFirst({ where: { entityType: "PROSPECT", entityId: prospect.id, sourceUrl: item.sourceUrl, snippet: item.snippet } });
+        if (!exists) await tx.evidence.create({ data: { ...item, entityType: "PROSPECT", entityId: prospect.id, provider: "live" } });
+      }
 
       let decisionMaker = null;
       let outreach = null;

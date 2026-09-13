@@ -4,7 +4,7 @@ import { request as fetch } from "@/lib/client";
 import { useEffect, useState } from "react";
 import { useParams } from "next/navigation";
 import Link from "next/link";
-import { Card, Badge, DemoBadge, Button, SectionHeading, ProgressBar, Skeleton, EmptyState } from "@/components/ui/primitives";
+import { Card, Badge, DemoBadge, LiveBadge, Button, SectionHeading, ProgressBar, Skeleton, EmptyState } from "@/components/ui/primitives";
 import type { ScoreComponent } from "@/lib/types";
 
 interface Evidence {
@@ -280,7 +280,7 @@ export default function ProspectDetailPage() {
       <Card className="mb-6">
         <div className="mb-3 flex items-center justify-between">
           <SectionHeading eyebrow="Sources" title="Evidence" />
-          <DemoBadge />
+          {evidence.length > 0 && evidence.every((e) => e.isDemo) ? <DemoBadge /> : evidence.length > 0 && evidence.every((e) => !e.isDemo) ? <LiveBadge /> : evidence.length > 0 ? <span className="text-[10px] font-medium text-black/40">Mixed live/demo</span> : null}
         </div>
         {evidence.length === 0 ? (
           <EmptyState title="No evidence recorded" />

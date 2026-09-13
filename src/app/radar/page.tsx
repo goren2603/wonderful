@@ -5,7 +5,7 @@ import { request as fetch } from "@/lib/client";
 import { useEffect, useState } from "react";
 import Link from "next/link";
 import { ProductHeader } from "@/components/layout/ProductHeader";
-import { Card, Badge, ConfidenceBadge, DemoBadge, Button, SectionHeading, EmptyState, Skeleton } from "@/components/ui/primitives";
+import { Card, Badge, ConfidenceBadge, DemoBadge, LiveBadge, Button, SectionHeading, EmptyState, Skeleton } from "@/components/ui/primitives";
 import { TrendLineChart } from "@/components/charts/Charts";
 
 const LENSES = ["ALL", "CANDIDATE", "CUSTOMER", "EXECUTIVE", "INVESTOR"] as const;
@@ -40,8 +40,10 @@ interface Mention {
   id: string;
   text: string;
   sourceName: string;
+  sourceUrl: string;
   audienceLens: string;
   sentiment: string;
+  isDemo: boolean;
 }
 interface Overview {
   company: Company;
@@ -210,13 +212,22 @@ export default function RadarPage() {
           <Card className="mb-8">
             <div className="mb-3 flex items-center justify-between">
               <SectionHeading eyebrow={`Lens: ${lens === "ALL" ? "All audiences" : lens}`} title="Recent mentions" />
-              <DemoBadge />
+              {overview.mentions.every((m) => m.isDemo) ? <DemoBadge /> : overview.mentions.every((m) => !m.isDemo) ? <LiveBadge /> : <span className="text-[10px] font-medium text-black/40">Mixed live/demo</span>}
             </div>
             <div className="max-h-80 space-y-2 overflow-y-auto">
               {overview.mentions.slice(0, 30).map((m) => (
                 <div key={m.id} className="flex items-start justify-between gap-3 rounded-lg border border-black/5 px-3 py-2 text-sm">
-                  <p className="text-black/70">&ldquo;{m.text}&rdquo;</p>
+                  <p className="text-black/70">
+                    {m.isDemo ? (
+                      `“${m.text}”`
+                    ) : (
+                      <a href={m.sourceUrl} target="_blank" rel="noreferrer" className="underline decoration-dotted hover:text-radar">
+                        &ldquo;{m.text}&rdquo;
+                      </a>
+                    )}
+                  </p>
                   <div className="flex shrink-0 items-center gap-1.5">
+                    {m.isDemo ? <DemoBadge /> : <LiveBadge />}
                     <Badge tone="neutral">{m.audienceLens.toLowerCase()}</Badge>
                     <Badge tone={m.sentiment === "POSITIVE" ? "positive" : m.sentiment === "NEGATIVE" ? "negative" : "neutral"}>{m.sentiment.toLowerCase()}</Badge>
                   </div>

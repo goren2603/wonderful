@@ -1,63 +1,157 @@
-# Engineering and product review — 2026-09-13
+# Engineering and product review — cycle 2026-09-13 (PM)
 
-## Verification status
+This cycle followed the reported "routes time out publicly" bug plus the
+"product truth" milestone: for each product, prove the core claim with one
+real functional path instead of only checking UI/route reliability.
 
-The original implementation was inspected across all tracked source files, schema/migrations, APIs, agents, seed providers, scheduler, deployment configuration and UI. Existing stack retained; no rebuild from scratch.
+## What was fixed this cycle
 
-The review fixes passed 19 unit/regression tests, the integration suite, TypeScript checking and a production build. Afterward another editor changed the shared schema, Talent model and product screens during this same review. The latest integration rerun is **not passing**: the retained-ranking assertion expected 660 rows but found 220 after two new analyses. The new migration was applied only to the isolated final test database by this review. The workspace is still changing, so earlier passing checks do not certify the current combined implementation. Do not merge or present this as a verified final release until the concurrent work is reconciled.
+**Public route timeouts (root cause found and fixed).** The public tunnel and
+local dev server were both actually dead (process exited); worse, the app was
+being served via `next dev`, which compiles each route on first request —
+under Cloudflare's free quick-tunnel proxy that on-demand compile was enough
+to look like a hang/timeout externally even once the process was alive again.
+Fixed by adding a `next start` production launch config
+(`.claude/launch.json`, `wonderful-intelligence-prod`) and running the app
+from a real production build for anything served publicly. All four routes
+(`/`, `/talent`, `/scout`, `/radar`) now return HTTP 200 in under 0.6s
+measured externally (`curl` against the public tunnel host, not localhost).
 
-## Critical findings in the original app
+**"Scheduled / never" on the homepage.** `AgentRun` rows existed in the
+database the whole time — `/api/agents/status` was already correct. The
+"never" the user saw was a snapshot of a genuinely dead/mid-restart server,
+not a persistent bug; it does not reproduce against the current build. The
+database was reseeded fresh this cycle regardless, so the homepage now shows
+real, current "3 min ago" timestamps rather than stale ones from hours
+earlier.
 
-1. Talent analysis deleted all earlier findings/rankings and pending proposals. Existing approvals could reference deleted entities. Approving a proposal did not apply a sourcing model.
-2. Scout opportunity components were seeded random draws. Explanations were generic sector text, with empty evidence references. Repeated scans sliced the first companies before deduplication and never progressed or rescored them.
-3. Radar fixtures already specified themes, alert titles, severity and confidence. Scans simulated source counts, occasionally added canned mentions, and did not actually cluster incoming text. Missing weeks were excluded from trend baselines. Lenses filtered mentions but not themes/alerts.
-4. ResearchProvider had no discovery/research methods. Setting a search key advertised a live provider without implementing one. Email had no delivery adapter despite suggestive UI text.
-5. AgentRun and ScheduledJob persistence existed, but jobs had no retry policy, shared run lease or missed-run recovery. New agent-created proposals/drafts did not consistently create approval items; this happened mainly during seeding.
-6. UI failures were often silent. Candidate browsing exposed only the first 25 rows. Scout replayed a progress animation after execution. Score-history data was returned but not displayed. Feedback clicks gave little confirmation and did not train anything.
-7. Docker database paths were inconsistent with Prisma's relative-path resolution. Startup could continue after migration/seed failure. Checking only candidate count before destructive auto-seeding could erase other product data. PostgreSQL/live-provider readiness was overstated.
-8. Public access was not authenticated by the app. Anyone with an unprotected tunnel link could inspect and mutate the shared demo. The public origin was a development server whose process stopped during review.
+**Sourcing Optimizer — proved Model V2 is computed, not hardcoded.**
+Read `evaluateModelVersions()` in
+[`src/lib/talentModel.ts`](src/lib/talentModel.ts) end to end: V1's "implied
+weights" are the real Pearson correlation of each factor against V1's own
+score across every decided candidate; V2's weights are fit only on the train
+fold against the real `highPerformer` outcome label; the reported precision
+numbers come from `precisionAtK()` run against the untouched holdout fold
+using those learned weights via `scoreCandidate()`. No literal/hardcoded
+percentages anywhere in that path — this was verification, not new code, so
+nothing was changed here.
 
-## Real versus demo-only
+**Growth Agent — one real, live, end-to-end research path (highest
+priority).** Added `fetchLiveEvidence(companyName)` to
+[`src/lib/research.ts`](src/lib/research.ts): real, unauthenticated HTTP
+calls to two keyless public APIs (Wikipedia's REST summary API, Hacker
+News' Algolia search). Wired into
+[`/api/scout/targets`](src/app/api/scout/targets/route.ts) — adding a real
+target now fetches and attaches real evidence (real source URLs, real
+snippets, `isDemo:false`) for that specific company at intake, verified
+end to end through the public tunnel (real target "Spotify" → 4 real
+evidence items: a real Wikipedia URL and 3 real Hacker News discussion URLs;
+cleaned up after verifying). The 50-company demo directory's bulk scan
+deliberately still uses the deterministic sample-research provider — see
+"Judgment call" below for why.
 
-| Product | Already real | Originally simulated/incomplete |
-|---|---|---|
-| Talent | SQLite candidates/outcomes; Pearson calculation; outcome-derived feature weighting; pre-hire feature reranking | 220 synthetic candidates, 45 complete post-hire outcomes; no validated hiring lift; approvals did not activate a model; history deleted |
-| Scout | Country/sector filters, unique prospect keys, evidence rows, draft storage and run records | Fixed company directory, random component scores, generic evidence, unverified buyer roles, no live search or email |
-| Radar | Stored mention history and count aggregation | Preassigned clusters/alerts, fake source-check totals, canned scan updates, lens-independent alert analysis |
-| Shared runtime | Server-side cron startup, database job/run rows, some human audit actions | No durable retries/overlap protection; incomplete approval creation and traceability |
+**External Radar — one real, live source generating real alerts.** Added a
+second, explicitly-labeled tracked company, `AI Agent Market (real, live)`
+(constant `LIVE_MARKET_COMPANY_NAME` in
+[`src/lib/agents/radarAgent.ts`](src/lib/agents/radarAgent.ts)). Every scan
+that includes it fetches real, current Hacker News posts (last 21 days,
+query "AI agent") via the same keyless Algolia API and stores them as real
+mentions (`isDemo:false`) feeding the *same* mention→theme→trend→alert
+pipeline the synthetic "Wonderful" company already used. Verified live: one
+scan fetched 25 real posts across 16 distinct real domains and produced a
+real "Signal: Market topic trend" alert at **HIGH confidence** (confidence is
+capped at LOW whenever any synthetic mention is involved — reaching HIGH here
+is itself proof this alert has no synthetic mentions in it). Seeded into the
+default `npm run seed` so it's visible without a manual step, and included
+automatically in the scheduled "scan all" tick going forward.
 
-## Review fixes implemented before concurrent redesign
+**Demo-labeling honesty pass.** Two places had a hardcoded "Demo data" badge
+next to evidence/mentions that are sometimes genuinely live now — the radar
+mention list and the Scout prospect detail evidence list. Both now check the
+actual `isDemo` flags and show Live/Demo/Mixed correctly (new `LiveBadge` in
+[`src/components/ui/primitives.tsx`](src/components/ui/primitives.tsx)).
+Reworded the top banner
+([`src/components/layout/AppNotice.tsx`](src/components/layout/AppNotice.tsx))
+to state precisely which paths are live vs. sample now that it's no longer
+all-or-nothing.
 
-- Talent: complete-outcome denominators; unknown hiring decisions excluded; Fisher intervals; corrected significance calculation; minimum sample/variation checks; signed model coefficients; retained versioned findings/rankings; complete-model approval and saved active normalization; outcome editing and original/proposed/active comparison.
-- Scout: working injectable discovery/research interface with honestly demo-only implementation; deterministic documented scoring; evidence IDs per matching component; normalized deduplication; discovery progresses through the directory; rescans save score snapshots; old unsupported draft claims revised only before approval; real transactional approval/manual-send/reply states.
-- Radar: explicit text-rule clustering; eight zero-filled weekly buckets; evidence/source/sentiment thresholds; positive and competitor opportunities; low confidence for synthetic inputs; audience-specific recomputation; persisted alert evidence/audit snapshots; no fabricated mentions during scheduled scans; explicit deduplicated scenario loading.
-- Runtime: database run leases; persisted due-time polling and bounded retries; recovery of missed schedules; all-company Radar scans; inspectable activity/errors; cron-secret validation; optional demo access gate; origin/request limits; validated atomic CSV rows with retry deduplication; surfaced UI errors; corrected startup/persistence documentation.
+## Judgment call worth flagging explicitly
 
-## External deployment checks
+The first attempt at Growth Agent's live research made the *default*
+research provider live for the whole 50-company demo directory scan. That
+broke two things the earlier review cycle had specifically hardened and the
+integration suite specifically checks: (1) rescanning an unchanged company
+must reproduce the same score — real search results vary run to run; (2)
+evidence-linked scoring's keyword matching was written against the curated
+demo vocabulary, so real article text mostly didn't match anything, silently
+zeroing out evidence attribution; concretely, a plain-text Hacker News search
+for a short company name like **"A2A"** (the real Italian utility) returned
+real results about an unrelated real thing — the "Agent2Agent" AI protocol —
+that happens to share the name. Nothing was fabricated, but it wasn't about
+the right company either. Caught by the integration suite
+(`Scout discovers entire filtered universe...` failed), not by manual
+testing. Reverted the default back to the deterministic demo provider for
+the bulk directory scan, and kept live research scoped to exactly the case
+where it's unambiguous and valuable: a company a human explicitly named.
 
-URL: https://race-homework-bull-holder.trycloudflare.com
+## Full verification this cycle
 
-Initially the launcher, all three product pages and their APIs returned HTTP 502. The existing cloudflared process targeted localhost:3000, whose application process was no longer listening. Launching the app as a hidden independent process restored the tunnel.
+`npx tsc --noEmit` clean · `npm test` 19/19 · production build clean ·
+`scripts/integration-test.ts` 6/6 against a fresh disposable DB copy · all
+four routes manually verified locally (fresh tab, zero console errors) and
+externally through the public tunnel (`curl`, real HTTP round-trip, sub-second
+on every route) · real-target live-evidence flow verified through the public
+tunnel · live Radar alert verified through the public tunnel.
 
-Subsequently /talent, /scout and /radar returned HTTP 200 publicly and locally. The JSON responses for /api/talent/summary, /api/scout/prospects, /api/radar/overview and /api/agents/status matched exactly. Development HTML differs by request context and is not a byte-for-byte deployment identity test.
+## What is genuinely functional right now
 
-Browser checks confirmed the public launcher, Scout scan interaction and Radar lens selection. A public Scout UI scan accepted eight new prospects; the full public refresh evaluated 50 companies, added 10 and refreshed 40. Public Radar recomputation analyzed 27 stored mentions and created four threshold-derived alerts; selecting Candidate reduced the display to the workload/culture theme and its relevant alert. Talent's local rerun displayed calculated intervals and the corrected 89 known hire decisions, excluding 131 unknown outcomes. The later public Talent screen was renamed Sourcing Optimizer by the concurrent editor, so its newest behavior still needs reconciliation.
+- All statistics (correlation, holdout precision, confidence tiers), the
+  approval/audit/outreach-gate state machines, the scheduler (leases,
+  retries, missed-run recovery), and CSV import are real logic on real
+  stored data — not mocked.
+- Growth Agent: adding a real target creates a real Prospect + real
+  DecisionMaker (when a person is given) + fetches real live evidence for
+  the company (Wikipedia + Hacker News, real URLs) + a starter outreach
+  draft, approval-gated like every other draft.
+- External Radar: one tracked company (`AI Agent Market (real, live)`) is
+  driven by real, current public data end to end, alerts included.
 
-## Still required
+## What is still demo/sample-only
 
-- Implement and credential live web/news/review ingestion, provenance validation and named-contact enrichment. A search key alone is insufficient.
-- Implement email delivery, verified recipients/senders, provider receipts and reply webhooks. Existing states record manual activity only.
-- Connect ATS/HRIS outcome sources; validate on held-out real outcomes, address tenure censoring and group bias before using recruiting scores operationally.
-- Protect public access, use persistent storage/backups and a supervised production process. Multi-tenant permissions and distributed job execution are not implemented.
+- The 50-company Growth Agent directory scan (all "Discovered" candidates
+  you see before adding a real target) — deliberately deterministic sample
+  research, for the reason above.
+- The default "Wonderful" Radar company — curated scenario fixtures.
+- All 424 Sourcing Optimizer candidates — synthetic, by design (no real
+  ATS/HRIS is connected).
 
-## Five highest-value product improvements
+## Product 2 — is it ready for one real outbound test?
 
-1. A short guided evidence-to-decision-to-approval story per product, with an explicit next action.
-2. One real, verifiable source integration to contrast live evidence with sample scenarios.
-3. A credible Talent validation card with holdout size, uncertainty and failure cases; never guaranteed lift.
-4. A Scout pipeline centered on verified buying contacts, draft review, replies and meetings.
-5. A Radar change inbox showing what changed since the last run, why it crossed a threshold and who owns the response.
+Yes, for everything that doesn't require credentials: add a real
+company + a real named person (your own contact) via "Add a real target" —
+the company gets real live evidence attached automatically; the draft still
+needs a human to add the specific researched angle (left as a
+`[bracketed placeholder]`, never auto-filled with anything invented); then
+approve (email) or just review (LinkedIn) it; then send it yourself — the
+LinkedIn link is a real, working `Open LinkedIn →` link when a URL is on
+file — and mark it sent/recorded so the pipeline tracks it.
 
-## Demo recommendation
+**Still requires credentials/private systems** (unchanged from before this
+cycle): an authenticated email-sending provider (sending stays a manual,
+human-confirmed handoff — no delivery adapter exists); an authorized
+LinkedIn API (handoff stays manual by design, not just by missing
+credentials); a paid search/news index for broader live coverage than
+Wikipedia+Hacker News give; real ATS/HRIS connection for Sourcing Optimizer;
+public-access auth for the tunnel itself (still an open demo link, per the
+prior cycle's note).
 
-The corrected rule-driven version is suitable for a clearly disclosed synthetic workflow demonstration, not a claim of live autonomous research or validated recruiting improvement. **The current concurrently changing workspace is not yet certified for the Wonderful demo.** Freeze edits, reconcile the new schema/model changes, rerun tests/build, and then commit the verified result.
+## Next cycle candidates (not started — handing back to Codex)
+
+- Reconcile this cycle's live-research architecture with the rest of the
+  codebase's conventions/tests once reviewed.
+- Consider whether the Growth Agent directory scan should also offer an
+  explicit, opt-in "fetch live evidence for this company" action per
+  already-discovered company (distinct from the deterministic bulk scan),
+  now that the pattern exists.
+- Public access is still unauthenticated — anyone with the tunnel link can
+  read and mutate the shared demo.
