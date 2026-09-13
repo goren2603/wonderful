@@ -1,5 +1,24 @@
 # Engineering and product review — cycle 2026-09-13 (night)
 
+## Post-review fix pass (same night, before sharing)
+
+A manual review of this cycle's output caught a real bug before it reached
+anyone: ABN AMRO's "verified" contact was Gerrit Zalm, who left as CEO in
+2017 — `wikidata.ts` took `claims.P169[0]` without checking whether that
+claim's tenure had ended. Fixed to check each claim's rank and P582
+(end-time) qualifier; ambiguous cases now return "not verified" instead of
+guessing. The fix also reconciles existing saved contacts on every future
+scan (not just new ones going forward) — a stale contact's outreach is
+deleted and its pending approval superseded, with an audit entry recording
+what happened. Also removed a leftover `{{sender_name}}` placeholder from
+"ready to send" drafts, stopped citing old (2014/2017) evidence as "why
+now," fixed a stale banner claim, and added a dynamic "explore a real
+example" link + a short "how it works" section to the launcher. Full detail
+in the commit for this pass. Re-verified: typecheck, tests, build,
+integration suite, public tunnel, commit-SHA match — all clean.
+
+
+
 Context for this cycle: the target is a link sent to a specific external
 evaluator (Wonderful) to demonstrate hands-on ability to build and ship real
 products with AI coding agents. Priority order given: Growth → Radar →
