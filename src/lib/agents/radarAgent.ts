@@ -18,47 +18,11 @@ export async function seedRadarData(companyName='Wonderful') {
   return company.id;
 }
 
-// The one real, live-data company: unlike "Wonderful" (a fictional employer
-// brand with no real public footprint), this tracks genuine, current public
-// discussion of AI agents — the category Wonderful's own products sit in —
-// fetched from a real, keyless public API (Hacker News' Algolia search).
-// Every mention here is a real dated post with a real source URL; nothing is
-// invented. It does not claim to be "about Wonderful" — the mention text says
-// exactly what it is: real public industry discussion of the category.
-export const LIVE_MARKET_COMPANY_NAME = 'AI Agent Market (real, live)';
-
-async function ensureLiveMarketCompany() {
-  return db.company.upsert({where:{name:LIVE_MARKET_COMPANY_NAME},update:{},create:{name:LIVE_MARKET_COMPANY_NAME,isDefault:false}});
-}
-
-// audienceLens 'EXECUTIVE' here is a best-effort default (category/market-
-// strategy discussion is plausibly leadership-relevant), not a verified
-// claim about who actually read any specific post.
-async function ingestLiveMarketMentions(companyId:string):Promise<{fetched:number;stored:number}> {
-  const sinceUnix=Math.floor((Date.now()-21*86400000)/1000);
-  const url=`https://hn.algolia.com/api/v1/search_by_date?query=${encodeURIComponent('AI agent')}&tags=story&numericFilters=created_at_i%3E${sinceUnix}&hitsPerPage=25`;
-  let hits:unknown[]=[];
-  try {
-    const res=await fetch(url,{signal:AbortSignal.timeout(8000),headers:{'User-Agent':'wonderful-intelligence-demo/1.0 (radar prototype)'}});
-    if(res.ok) {const data=await res.json().catch(()=>null); hits=Array.isArray(data?.hits)?data.hits:[];}
-  } catch { /* live source unreachable this run; scan proceeds on whatever is already stored */ }
-  let stored=0;
-  for(const raw of hits) {
-    const hit=raw as {title?:string;url?:string;created_at?:string;objectID?:string;points?:number;num_comments?:number};
-    if(!hit.title||!hit.created_at||!hit.objectID) continue;
-    const discussionUrl=`https://news.ycombinator.com/item?id=${hit.objectID}`;
-    const sourceUrl=hit.url||discussionUrl;
-    const text=`Real, live Hacker News industry discussion and category interest: "${hit.title}" (${hit.points??0} points, ${hit.num_comments??0} comments, ${discussionUrl}).`;
-    const exists=await db.mention.findFirst({where:{companyId,sourceUrl,text}});
-    if(!exists) {await db.mention.create({data:{companyId,text,sourceName:'Hacker News',sourceUrl,sourceDate:new Date(hit.created_at),audienceLens:'EXECUTIVE',sentiment:'NEUTRAL',category:'Market signal',isDemo:false}});stored++;}
-  }
-  return {fetched:hits.length,stored};
-}
 // Any company you add by name (via "Add any company" in Radar) gets real,
 // live evidence for ITS OWN name — the same keyless Wikipedia + Hacker News
-// lookup Growth Agent uses for a real target — not the fixed "AI agent"
-// market query above. This is what makes "add a competitor and compare it
-// to Wonderful" real: the competitor's mentions are genuinely live.
+// lookup Growth Agent uses for a real target. This is what makes "add a
+// competitor and compare it to Wonderful" real: the competitor's mentions
+// are genuinely live.
 //
 // The default "Wonderful" company gets this too, searched as "wonderful.ai"
 // rather than the bare word "wonderful" — a plain English word is too noisy
@@ -121,31 +85,21 @@ export async function runRadarScan(companyName?:string) {
     const steps:AgentStep[]=[];
     let sourcesChecked=0,actionsCreated=0,entitiesFound=0,liveFetched=0,liveStored=0;
     try {
-      if(!companyName) await ensureLiveMarketCompany(); // included in every scheduled "scan all" pass
       const companies=await db.company.findMany({where:companyName?{name:companyName}:undefined});
       if(companyName&&!companies.length) throw new Error('Company not found');
       for(const company of companies) {
-        let liveIngest:{fetched:number;stored:number}|null=null;
-        if(company.name===LIVE_MARKET_COMPANY_NAME) {
-          liveIngest=await ingestLiveMarketMentions(company.id);
-          liveFetched+=liveIngest.fetched;liveStored+=liveIngest.stored;
-          steps.push({label:'Fetching live source',detail:`Hacker News (Algolia search API, last 21 days, query "AI agent"): ${liveIngest.fetched} posts fetched, ${liveIngest.stored} new mentions stored.`,at:new Date().toISOString()});
-          await db.agentRun.update({where:{id:run.id},data:{stepsJson:JSON.stringify(steps)}});
-        } else {
-          // Every other tracked company — including the default "Wonderful",
-          // searched as its real domain — gets real live evidence for its
-          // own name.
-          const searchTerm=company.isDefault?WONDERFUL_SEARCH_TERM:company.name;
-          liveIngest=await ingestLiveCompanyMentions(company.id,searchTerm);
-          liveFetched+=liveIngest.fetched;liveStored+=liveIngest.stored;
-          steps.push({label:'Fetching live source',detail:`Wikipedia + Hacker News for "${searchTerm}": ${liveIngest.fetched} real items fetched, ${liveIngest.stored} new mentions stored.`,at:new Date().toISOString()});
-          await db.agentRun.update({where:{id:run.id},data:{stepsJson:JSON.stringify(steps)}});
-        }
+        // Every tracked company — including the default "Wonderful", searched
+        // as its real domain — gets real live evidence for its own name.
+        const searchTerm=company.isDefault?WONDERFUL_SEARCH_TERM:company.name;
+        const liveIngest=await ingestLiveCompanyMentions(company.id,searchTerm);
+        liveFetched+=liveIngest.fetched;liveStored+=liveIngest.stored;
+        steps.push({label:'Fetching live source',detail:`Wikipedia + Hacker News for "${searchTerm}": ${liveIngest.fetched} real items fetched, ${liveIngest.stored} new mentions stored.`,at:new Date().toISOString()});
+        await db.agentRun.update({where:{id:run.id},data:{stepsJson:JSON.stringify(steps)}});
         const mentions=await db.mention.findMany({where:{companyId:company.id}});
         sourcesChecked+=mentions.length;
         const clusters=new Map<string,{category:string;ids:string[]}>();
         for(const m of mentions) {const c=classifyTheme(m.text,m.category);const group=clusters.get(c.label)??{category:c.category,ids:[]};group.ids.push(m.id);clusters.set(c.label,group);}
-        steps.push({label:'Clustering',detail:`${company.name}: ${mentions.length} stored mentions classified into ${clusters.size} text-rule themes.${liveIngest?' Includes live evidence fetched this run.':' No external pages fetched.'}`,at:new Date().toISOString()});
+        steps.push({label:'Clustering',detail:`${company.name}: ${mentions.length} stored mentions classified into ${clusters.size} text-rule themes.`,at:new Date().toISOString()});
         await db.agentRun.update({where:{id:run.id},data:{stepsJson:JSON.stringify(steps)}});
         const spikeCandidates:{themeId:string;label:string;members:{text:string;sourceUrl:string;sourceName:string;isDemo:boolean}[]}[]=[];
         await db.$transaction(async tx=>{
