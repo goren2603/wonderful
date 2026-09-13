@@ -57,7 +57,7 @@ interface Prospect {
   scoreHistory: { score: number; recordedAt: string }[];
 }
 
-function OutreachCard({ message, onChanged }: { message: OutreachMessage; onChanged: () => void }) {
+function OutreachCard({ message, onChanged, decisionMakerLinkedinUrl }: { message: OutreachMessage; onChanged: () => void; decisionMakerLinkedinUrl?: string | null }) {
   const [copied, setCopied] = useState(false);
   const [manualConfirmed,setManualConfirmed]=useState(false);
   const [replyNote,setReplyNote]=useState("");
@@ -152,9 +152,16 @@ function OutreachCard({ message, onChanged }: { message: OutreachMessage; onChan
             <Button size="sm" variant="secondary" onClick={copy}>
               {copied ? "Copied!" : "Copy message"}
             </Button>
-            <span className="rounded-md border border-dashed border-black/20 px-2.5 py-1.5 text-xs text-black/45">
-              Open LinkedIn — requires live profile research (demo mode). Authorized LinkedIn integration would be required for automatic sending; this is always a manual handoff.
-            </span>
+            {decisionMakerLinkedinUrl ? (
+              <a href={decisionMakerLinkedinUrl} target="_blank" rel="noreferrer" className="inline-flex items-center justify-center rounded-lg border border-black/10 bg-white px-3 py-1.5 text-sm font-medium text-black/80 hover:bg-black/[0.03]">
+                Open LinkedIn →
+              </a>
+            ) : (
+              <span className="rounded-md border border-dashed border-black/20 px-2.5 py-1.5 text-xs text-black/45">
+                No LinkedIn profile on file yet — add one via &quot;Add a real target&quot; to enable Open LinkedIn.
+              </span>
+            )}
+            <span className="w-full text-xs text-black/40">Sending is always a manual handoff here — no authorized LinkedIn integration is connected.</span>
             {message.status !== "SENT" && (
               <Button size="sm" variant="ghost" onClick={() => setStatus("SENT")}>
                 Mark as manually sent
@@ -311,11 +318,26 @@ export default function ProspectDetailPage() {
                   </p>
                   <span className="text-xs text-black/40">{dm.isReal ? `${Math.round(dm.confidence * 100)}% confidence` : "Role hypothesis, not a verified contact"}</span>
                 </div>
-                {dm.isReal && <p className="mb-1 text-xs text-black/50">{dm.title}{dm.email ? ` · ${dm.email}` : ""}{dm.linkedinUrl ? ` · ${dm.linkedinUrl}` : ""}</p>}
+                {dm.isReal && (
+                  <p className="mb-1 text-xs text-black/50">
+                    {dm.title}
+                    {dm.email ? ` · ${dm.email}` : ""}
+                    {dm.linkedinUrl ? (
+                      <>
+                        {" · "}
+                        <a href={dm.linkedinUrl} target="_blank" rel="noreferrer" className="underline">
+                          {dm.linkedinUrl}
+                        </a>
+                      </>
+                    ) : (
+                      ""
+                    )}
+                  </p>
+                )}
                 {dm.whyThisPerson && <p className="mb-3 text-xs italic text-black/45">Why this person: {dm.whyThisPerson}</p>}
                 <div className="space-y-3">
                   {[...messages, ...orphaned].map((m) => (
-                    <OutreachCard key={m.id} message={m} onChanged={load} />
+                    <OutreachCard key={m.id} message={m} onChanged={load} decisionMakerLinkedinUrl={dm.linkedinUrl} />
                   ))}
                   {messages.length === 0 && orphaned.length === 0 && <EmptyState title="No outreach drafted for this person yet" />}
                 </div>
