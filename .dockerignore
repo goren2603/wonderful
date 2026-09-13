@@ -6,3 +6,14 @@ node_modules
 prisma/dev.db
 prisma/dev.db-journal
 *.tsbuildinfo
+.review
+.next-review
+.claude
+.codex
+.agents
+.env.*
+**/*.db
+**/*.db-journal
+**/*.db-wal
+**/*.db-shm
+*.log

@@ -44,10 +44,10 @@ Install generates Prisma; build compiles the app without replacing Prisma's engi
 
 | Setting | Implemented behavior |
 |---|---|
-| `DATABASE_URL` | Required SQLite URL; example uses `file:./dev.db`. PostgreSQL needs schema and migration changes, not just a URL change. |
+| `DATABASE_URL` | Required Postgres URL (e.g. Vercel Postgres or Neon). Local dev can point at the same hosted database, or any local Postgres. |
 | `ANTHROPIC_API_KEY` / `ANTHROPIC_MODEL` | Optional real Talent narrative call, with a 15-second timeout and computed-summary fallback. It does not discover evidence or train the ranking model. |
-| `SEARCH_PROVIDER_API_KEY` | Reserved. **No live adapter is implemented.** A key alone does nothing. Implement `ResearchProvider` discovery/research and a Radar ingestion adapter with verified provenance. |
-| `EMAIL_PROVIDER_API_KEY` | Reserved. **No delivery adapter is implemented.** Requires recipients, sender setup, provider receipts and delivery webhooks. |
+| — | Live research (Wikipedia + Hacker News) and executive verification (Wikidata) are real and always on for Growth Agent's default scan, real targets, and Radar — no key needed, both are free/keyless public APIs. |
+| `RESEND_API_KEY` / `ALERT_EMAIL_FROM` | Optional real email delivery for Radar spike alerts (self-serve subscribe on the Radar page). Without these, alerts are logged but never actually sent. |
 | `CRON_SECRET` | Required for external GET cron requests; unset means external cron is disabled. Local scheduling needs no secret. |
 | `DEMO_ACCESS_TOKEN` | Optional HTTP Basic gate for the entire demo; use any username and this token as password. Keep it in environment secrets. Without this or upstream Cloudflare Access, anyone with the tunnel URL can read and change demo data. |
 | `DISABLE_SCHEDULER=1` | Disable the in-process scheduler for tests/builds. |
@@ -59,9 +59,9 @@ Do not import real candidate/customer data into an unprotected public demo. HTTP
 
 A persistent Node process polls `ScheduledJob.nextRunAt` every 15 seconds. Schedules use **UTC**: Scout daily 07:00; Radar every 6 hours; Talent Mondays 06:00. Existing persisted due dates survive restart and missed jobs are picked up. Disabled jobs are skipped. A database lease prevents overlapping manual/scheduled runs; expired 15-minute leases are recovered. Failed scheduled attempts persist bounded 1/2-minute retries, then return to the normal cadence. Provider operations have bounded retries; Talent narrative failure preserves computed results.
 
-SQLite is suitable for this single-instance demo. Use a persistent volume and backups. The Dockerfile stores data at `/app/data/dev.db`, runs migrations, seeds only a truly empty database, and fails startup if migration/seeding fails. The Render example uses an ephemeral free instance: records will not survive replacement unless you configure a durable disk. Mount persistence at `/app/data`.
+On Vercel, Postgres persistence is handled by the hosted database itself — no volume/disk config needed. The Dockerfile/Render path in this section still assumes the earlier SQLite setup and needs updating before use.
 
-Vercel cron configuration is included, but **the SQLite deployment is not serverless-ready**. A PostgreSQL port, authentication, request/runtime constraints and distributed job execution need validation first. The in-process scheduler is disabled on Vercel.
+Vercel deployment: the app runs on Postgres, `vercel.json` includes cron configuration hitting `/api/agents/run` (auth'd via `CRON_SECRET`), and the in-process scheduler auto-disables when `process.env.VERCEL` is set (Vercel Cron replaces it). `npm run build` runs `prisma migrate deploy` before `next build`. Distributed/multi-instance job execution beyond Vercel's own cron still isn't validated.
 
 ## Integration regression suite
 

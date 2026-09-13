@@ -1,16 +1,21 @@
 // Wonderful Intelligence — shared data model for all three products.
-// SQLite for zero-config local/demo persistence. See README for swapping to Postgres in production.
+// Postgres in production (Vercel) — see DATABASE_URL in Vercel project
+// settings. Local dev can still point DATABASE_URL at a local Postgres or a
+// free Neon/Vercel Postgres branch; there's no SQLite-specific code left in
+// src/, so either works.
 //
-// Note: SQLite has no native enum support in Prisma, so "enum-like" fields
-// are plain Strings here. Their allowed values are defined as TS union types
-// in src/lib/types.ts — treat that file as the source of truth.
+// "Enum-like" fields are plain Strings here (originally to support SQLite,
+// which has no native enum support in Prisma) — kept as Strings on Postgres
+// too rather than a needless migration risk. Their allowed values are
+// defined as TS union types in src/lib/types.ts — treat that file as the
+// source of truth.
 
 generator client {
   provider = "prisma-client-js"
 }
 
 datasource db {
-  provider = "sqlite"
+  provider = "postgresql"
   url      = env("DATABASE_URL")
 }
 
