@@ -31,6 +31,9 @@ async function ensureLiveMarketCompany() {
   return db.company.upsert({where:{name:LIVE_MARKET_COMPANY_NAME},update:{},create:{name:LIVE_MARKET_COMPANY_NAME,isDefault:false}});
 }
 
+// audienceLens 'EXECUTIVE' here is a best-effort default (category/market-
+// strategy discussion is plausibly leadership-relevant), not a verified
+// claim about who actually read any specific post.
 async function ingestLiveMarketMentions(companyId:string):Promise<{fetched:number;stored:number}> {
   const sinceUnix=Math.floor((Date.now()-21*86400000)/1000);
   const url=`https://hn.algolia.com/api/v1/search_by_date?query=${encodeURIComponent('AI agent')}&tags=story&numericFilters=created_at_i%3E${sinceUnix}&hitsPerPage=25`;
@@ -73,7 +76,15 @@ async function ingestLiveCompanyMentions(companyId:string,searchTerm:string):Pro
   for(const item of items) {
     const text=`Real, live public mention (${item.sourceName}): "${item.title}" — ${item.snippet.slice(0,300)}`;
     const exists=await db.mention.findFirst({where:{companyId,sourceUrl:item.sourceUrl,text}});
-    if(!exists) {await db.mention.create({data:{companyId,text,sourceName:item.sourceName,sourceUrl:item.sourceUrl,sourceDate:item.sourceDate,audienceLens:'EXECUTIVE',sentiment:'NEUTRAL',category:'Market signal',isDemo:item.isDemo}});stored++;}
+    // audienceLens is honestly a best-effort default here, not a verified
+    // classification: we don't know who actually reads a given Wikipedia
+    // summary or Hacker News post. General public company information is
+    // closest to what an investor/market-watcher would track — it is NOT a
+    // claim that any specific named executive said or saw this. Real named-
+    // executive monitoring (a distinct, more valuable capability) would
+    // require either the operator naming the people to track, or a separate
+    // real search for "who leads this company."
+    if(!exists) {await db.mention.create({data:{companyId,text,sourceName:item.sourceName,sourceUrl:item.sourceUrl,sourceDate:item.sourceDate,audienceLens:'INVESTOR',sentiment:'NEUTRAL',category:'Market signal',isDemo:item.isDemo}});stored++;}
   }
   return {fetched:items.length,stored};
 }
