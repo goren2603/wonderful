@@ -131,7 +131,10 @@ function strength(absR: number): "strong" | "moderate" | "weak" {
 export function evaluateModelVersions(allRows: CandidateRow[]): ModelEvaluation {
   const historical = allRows; // caller passes only non-batch rows
   const withDecision = historical.filter((c) => c.hired !== null && c.hired !== undefined);
-  const outcomeKnown = historical.filter((c) => c.hired && c.managerRating != null);
+  // Imports and outcome edits may leave the cached highPerformer flag stale.
+  // Use the documented rating threshold for both training and validation.
+  const outcomeKnown = historical.filter((c) => c.hired && c.managerRating != null)
+    .map((c) => ({ ...c, highPerformer: c.managerRating! >= 4 }));
 
   const empty: ModelEvaluation = {
     eligible: false,
@@ -183,7 +186,7 @@ export function evaluateModelVersions(allRows: CandidateRow[]): ModelEvaluation 
   const k = Math.max(1, Math.floor(holdout.length / 2));
   const v1Precision = precisionAtK(holdout, (c) => c.originalSourcingScore, (c) => Boolean(c.highPerformer), k);
   const v2Precision = precisionAtK(holdout, (c) => scoreCandidate(c, v2Weights, v2FeatureStats), (c) => Boolean(c.highPerformer), k);
-  const improvementPct = v1Precision > 0 ? ((v2Precision - v1Precision) / v1Precision) * 100 : v2Precision > 0 ? 100 : 0;
+  const improvementPct = v1Precision > 0 ? ((v2Precision - v1Precision) / v1Precision) * 100 : null;
 
   const factorAudit: FactorAuditRow[] = REUSABLE_FACTORS.map((f) => {
     const v1r = v1Entries.find((e) => e.key === f.key)!.r;
