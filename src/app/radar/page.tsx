@@ -81,6 +81,37 @@ function SignalCard({ alert, lens }: { alert: Alert; lens: string }) {
   );
 }
 
+function SubscribeBar() {
+  const [email, setEmail] = useState("");
+  const [status, setStatus] = useState<"idle" | "saving" | "done" | "error">("idle");
+  const submit = async () => {
+    if (!email.trim()) return;
+    setStatus("saving");
+    const res = await fetch("/api/radar/subscribe", { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ email }) });
+    setStatus(res.ok ? "done" : "error");
+  };
+  const unsubscribe = async () => {
+    await fetch("/api/radar/subscribe", { method: "DELETE", headers: { "content-type": "application/json" }, body: JSON.stringify({ email }) });
+    setStatus("idle");
+    setEmail("");
+  };
+  if (status === "done") {
+    return (
+      <div className="flex items-center gap-2 rounded-full border border-emerald-300 bg-emerald-50 px-3 py-1 text-xs text-emerald-800">
+        <span>✓ {email} will get a real email when a theme crosses {5}+ negative mentions in a week</span>
+        <button onClick={unsubscribe} className="underline">Unsubscribe</button>
+      </div>
+    );
+  }
+  return (
+    <div className="flex items-center gap-1.5">
+      <input value={email} onChange={(e) => setEmail(e.target.value)} placeholder="your@email.com" type="email" className="w-44 rounded-full border border-black/10 px-3 py-1 text-xs" onKeyDown={(e) => e.key === "Enter" && submit()} />
+      <Button size="sm" variant="secondary" onClick={submit} disabled={status === "saving"}>Get email alerts</Button>
+      {status === "error" && <span className="text-xs text-rose-600">Failed — try again</span>}
+    </div>
+  );
+}
+
 export default function RadarPage() {
   const [companies, setCompanies] = useState<Company[]>([]);
   const [activeCompany, setActiveCompany] = useState("Wonderful");
@@ -124,15 +155,22 @@ export default function RadarPage() {
     loadOverview();
   };
 
+  const [addingCompany, setAddingCompany] = useState(false);
   const addCompany = async () => {
     if (!newCompanyName.trim()) return;
-    const res = await fetch("/api/radar/companies", { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ name: newCompanyName.trim() }) });
-    const data = await res.json();
-    if (data.company) {
-      setCompanies((c) => (c.find((x) => x.id === data.company.id) ? c : [...c, data.company]));
-      setActiveCompany(data.company.name);
+    setAddingCompany(true);
+    try {
+      const res = await fetch("/api/radar/companies", { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ name: newCompanyName.trim() }) });
+      const data = await res.json();
+      if (data.company) {
+        setCompanies((c) => (c.find((x) => x.id === data.company.id) ? c : [...c, data.company]));
+        setActiveCompany(data.company.name);
+        loadOverview();
+      }
+      setNewCompanyName("");
+    } finally {
+      setAddingCompany(false);
     }
-    setNewCompanyName("");
   };
 
   const alertsByType = { RISK: 0, OPPORTUNITY: 0, PRODUCT_SIGNAL: 0 };
@@ -147,17 +185,21 @@ export default function RadarPage() {
         accentBg="bg-radar-soft"
       />
 
+      <div className="mb-4 flex justify-end">
+        <SubscribeBar />
+      </div>
+
       <div className="mb-6 flex flex-wrap items-center justify-between gap-3">
         <div className="flex flex-wrap items-center gap-2">
           <span className="text-xs font-medium uppercase tracking-wide text-black/40">Tracking</span>
           {companies.map((c) => (
             <button key={c.id} onClick={() => setActiveCompany(c.name)} className={`rounded-full border px-3 py-1 text-xs font-medium transition ${activeCompany === c.name ? "border-radar bg-radar-soft text-radar" : "border-black/10 text-black/50"}`}>
-              {c.name}{c.isDefault && " (demo)"}
+              {c.name}{c.isDefault && " (sample data)"}
             </button>
           ))}
           <div className="flex items-center gap-1">
-            <input value={newCompanyName} onChange={(e) => setNewCompanyName(e.target.value)} placeholder="Add any company…" className="w-36 rounded-full border border-black/10 px-3 py-1 text-xs" onKeyDown={(e) => e.key === "Enter" && addCompany()} />
-            <Button size="sm" variant="secondary" onClick={addCompany}>Add</Button>
+            <input value={newCompanyName} onChange={(e) => setNewCompanyName(e.target.value)} placeholder="Add a real competitor…" className="w-40 rounded-full border border-black/10 px-3 py-1 text-xs" onKeyDown={(e) => e.key === "Enter" && addCompany()} disabled={addingCompany} />
+            <Button size="sm" variant="secondary" onClick={addCompany} disabled={addingCompany}>{addingCompany ? "Fetching real data…" : "Add"}</Button>
           </div>
         </div>
         <div className="flex items-center gap-1">

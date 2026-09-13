@@ -9,6 +9,7 @@ import { Cron } from "croner";
 
 async function clearAll() {
   await db.$transaction([
+    db.alertEmailNotification.deleteMany({}),
     db.mention.deleteMany({}),
     db.trendPoint.deleteMany({}),
     db.alert.deleteMany({}),

@@ -365,6 +365,30 @@ model TrendPoint {
   @@index([themeId])
 }
 
+// Self-serve opt-in: anyone viewing the app can add their own address here
+// to receive real spike-alert emails. Never pre-populated with anyone's
+// address — a human has to type it in and submit it themselves.
+model AlertSubscriber {
+  id        String   @id @default(cuid())
+  email     String   @unique
+  createdAt DateTime @default(now())
+}
+
+// One row per (theme, calendar week) a spike email was actually sent for —
+// the dedupe key that stops the same spike re-emailing every scan, and a
+// real audit trail of what went out and to how many people.
+model AlertEmailNotification {
+  id             String   @id @default(cuid())
+  themeId        String
+  weekStart      DateTime
+  recipientCount Int
+  sent           Boolean // false when RESEND_API_KEY wasn't configured — still logged, never faked
+  reason         String? // why it wasn't sent, when sent=false
+  createdAt      DateTime @default(now())
+
+  @@unique([themeId, weekStart])
+}
+
 model Alert {
   id                String   @id @default(cuid())
   companyId         String

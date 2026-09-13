@@ -1,7 +1,25 @@
 import { NextResponse } from "next/server";
 import { db } from "@/lib/db";
 import { dedupeCompany } from "@/lib/scoutScoring";
-import { fetchLiveEvidence } from "@/lib/research";
+import { fetchLiveEvidence, type EvidenceItem } from "@/lib/research";
+import { USE_CASE_BY_VERTICAL, type Vertical } from "@/lib/seedData/prospects";
+
+// Composes a draft that's actually ready to send when real evidence came
+// back — grounded only in what was really fetched, never a fabricated pain
+// point. Falls back to an honest placeholder when live sources found
+// nothing, rather than inventing a reason.
+function composeResearchNote(companyName: string, vertical: string, evidence: EvidenceItem[]): string {
+  const useCase = USE_CASE_BY_VERTICAL[vertical as Vertical];
+  const wiki = evidence.find((e) => e.sourceName === "Wikipedia");
+  if (wiki) {
+    const summary = wiki.snippet.length > 220 ? wiki.snippet.slice(0, 220).replace(/\s+\S*$/, "") + "…" : wiki.snippet;
+    return `A bit about ${companyName}, from Wikipedia: "${summary}"${useCase ? ` Given that, I'd guess ${useCase.useCase.toLowerCase()} could be a live priority for your team — happy to be corrected.` : ""}`;
+  }
+  if (evidence.length > 0) {
+    return `I saw ${companyName} come up in public discussion recently (${evidence[0].sourceName}: "${evidence[0].title}") — worth a quick look before you rely on it, but it's what surfaced.${useCase ? ` Separately, ${useCase.useCase.toLowerCase()} is often a live priority for companies your size — is that true at ${companyName}?` : ""}`;
+  }
+  return `[No public research was found automatically for ${companyName} — add a specific, real reason this matters before sending.]`;
+}
 
 // Manual intake for a REAL target: a real company and, optionally, a real
 // named person you already know (your own contact, or one you've found).
@@ -11,9 +29,9 @@ import { fetchLiveEvidence } from "@/lib/research";
 // come back (isDemo=false, each with its real source URL) — it can come back
 // empty for a company with little public footprint, which is left as-is, not
 // backfilled with anything synthetic. It creates a real prospect/decision-
-// maker record and a starter outreach draft you (or a connected research
-// pass) can refine before anything is ever sent, which stays approval-gated
-// like every other draft.
+// maker record and an outreach draft — personalized from the real evidence
+// when any came back, an honest placeholder when it didn't — that stays
+// approval-gated like every other draft; nothing is ever sent automatically.
 export async function POST(req: Request) {
   const body = await req.json().catch(() => ({}));
   const companyName = (body.companyName as string | undefined)?.trim();
@@ -69,7 +87,9 @@ export async function POST(req: Request) {
             whyThisPerson: "Manually identified as a real target by the workspace operator.",
           },
         });
-        const body = `Hi ${personName.split(" ")[0]},\n\nI'm reaching out from Wonderful — we help enterprise teams apply AI to customer service, support, and operational workflows.\n\n[Add a specific, researched reason this matters to ${companyName} here before sending.]\n\nOpen to a short conversation?\n\n{{sender_name}}`;
+        const researchNote = composeResearchNote(companyName, vertical, liveEvidence);
+        const body = `Hi ${personName.split(" ")[0]},\n\nI'm reaching out from Wonderful — we help enterprise teams apply AI to customer service, support, and operational workflows.\n\n${researchNote}\n\nOpen to a short conversation?\n\n{{sender_name}}`;
+        const ready = liveEvidence.length > 0;
         outreach = await tx.outreachMessage.create({
           data: {
             prospectId: prospect.id,
@@ -77,7 +97,7 @@ export async function POST(req: Request) {
             channel: linkedinUrl ? "LINKEDIN" : "EMAIL",
             subject: email ? `Wonderful × ${companyName}` : null,
             body,
-            angle: "Starter draft — needs real research on this company/person before it's ready to send.",
+            angle: ready ? `Ready to review and send — personalized using ${liveEvidence.length} real, live evidence item(s) fetched at intake.` : "Starter draft — no live evidence was found automatically; add a specific, real reason this matters before sending.",
             status: "DRAFT",
           },
         });

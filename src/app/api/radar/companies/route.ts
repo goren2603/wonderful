@@ -1,5 +1,6 @@
 import { NextResponse } from "next/server";
 import { db } from "@/lib/db";
+import { runRadarScan } from "@/lib/agents/radarAgent";
 
 export const dynamic = "force-dynamic";
 
@@ -17,5 +18,15 @@ export async function POST(req: Request) {
   if (existing) return NextResponse.json({ company: existing, alreadyExisted: true });
 
   const company = await db.company.create({ data: { name, isDefault: false } });
+  // Fetch real live evidence for this exact name right away, so the operator
+  // sees genuine data on first load instead of an empty "load sample
+  // scenario" prompt — this is what makes typing a competitor's name in and
+  // immediately comparing it to Wonderful actually work.
+  try {
+    await runRadarScan(name);
+  } catch {
+    // Real live sources can legitimately return nothing for an obscure name;
+    // the company still exists and can be scanned again from the UI.
+  }
   return NextResponse.json({ company });
 }
