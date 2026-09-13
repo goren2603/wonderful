@@ -130,20 +130,51 @@ export async function runLiveGrowthDiscovery(params: LiveDiscoveryParams = {}) {
           const why = [
             `${company.employeeCountEstimate} public directory headcount in ${company.country}.`,
             evidence.length ? `${evidence.length} real, live evidence item(s) found — see Evidence below.` : sourceErrors.length ? 'Live sources could not be reached this run (see run steps) — not yet checked, not a confirmed negative.' : 'No real live evidence found for this name (Wikipedia, Hacker News both checked, both empty).',
-            exec ? `Verified contact: ${exec.name} (${exec.role}), sourced from Wikidata.` : 'No verified executive contact found on Wikidata — no outreach draft was created for this reason.',
+            exec ? `Verified contact: ${exec.name} (${exec.role}), currently-holding tenure confirmed via Wikidata.` : 'Current role not verified — Wikidata has no unambiguous current CEO/director claim for this company (either none exists, or multiple past holders with no clear current one). No outreach draft was created for this reason.',
           ];
           await tx.prospect.update({ where: { id: prospect.id }, data: { opportunityScore: score, scoreBreakdownJson: JSON.stringify(breakdown), useCase: useCase.useCase, useCaseRationale: useCase.rationale, status: existing?.status === 'NEW' ? 'SCORED' : existing?.status ?? 'SCORED', whyJson: JSON.stringify(why), runId: run.id } });
           await tx.scoreHistory.create({ data: { prospectId: prospect.id, score, breakdownJson: JSON.stringify(breakdown) } });
 
+          // Reconcile against what's actually stored: a previous run's
+          // verified contact can turn out to be wrong (e.g. Wikidata listing
+          // a former CEO) once the tenure-aware lookup above is applied to a
+          // company that already has a saved decision maker from before that
+          // fix existed. Never leave a stale contact and its draft/approval
+          // sitting there silently — correct it the same way a human review
+          // would: retire the wrong contact and its pending approval, and
+          // create the right one (or none, if no current holder is known).
+          const staleDecisionMaker = await tx.decisionMaker.findFirst({ where: { prospectId: prospect.id, isReal: true } });
+          if (staleDecisionMaker && staleDecisionMaker.name !== exec?.name) {
+            const staleMessages = await tx.outreachMessage.findMany({ where: { decisionMakerId: staleDecisionMaker.id } });
+            for (const m of staleMessages) {
+              await tx.approvalItem.updateMany({ where: { entityId: m.id, status: 'PENDING' }, data: { status: 'SUPERSEDED', decidedAt: new Date() } });
+            }
+            const staleMessageIds = staleMessages.map(m => m.id);
+            await tx.outreachMessage.deleteMany({ where: { id: { in: staleMessageIds } } });
+            await tx.decisionMaker.delete({ where: { id: staleDecisionMaker.id } });
+            await tx.auditLogEntry.create({ data: { actor: 'agent', action: 'contact_verification_corrected', entityType: 'DecisionMaker', entityId: staleDecisionMaker.id, detailJson: JSON.stringify({ runId: run.id, company: company.name, removedName: staleDecisionMaker.name, removedTitle: staleDecisionMaker.title, reason: 'Tenure-aware Wikidata re-check found this contact is no longer verified as currently holding the role.', replacedWith: exec?.name ?? null, supersededMessages: staleMessageIds.length }) } });
+          }
           if (exec) {
-            let decisionMaker = await tx.decisionMaker.findFirst({ where: { prospectId: prospect.id, isReal: true } });
-            if (!decisionMaker) decisionMaker = await tx.decisionMaker.create({ data: { prospectId: prospect.id, name: exec.name, title: exec.role, confidence: 0.8, isReal: true, whyThisPerson: `Listed as ${exec.role} of ${company.name} on Wikidata — automatically verified via a structured, sourced claim, not manually double-checked by a human. Source: ${exec.personSourceUrl}` } });
+            let decisionMaker = staleDecisionMaker?.name === exec.name ? staleDecisionMaker : await tx.decisionMaker.findFirst({ where: { prospectId: prospect.id, isReal: true, name: exec.name } });
+            if (!decisionMaker) decisionMaker = await tx.decisionMaker.create({ data: { prospectId: prospect.id, name: exec.name, title: exec.role, confidence: 0.8, isReal: true, whyThisPerson: `Listed as ${exec.role} of ${company.name} on Wikidata — automatically verified via a structured, sourced claim (current tenure checked against start/end-date qualifiers), not manually double-checked by a human. Source: ${exec.personSourceUrl}` } });
             const hasDraft = await tx.outreachMessage.findFirst({ where: { prospectId: prospect.id, decisionMakerId: decisionMaker.id } });
             if (!hasDraft) {
               const firstName = exec.name.split(' ')[0];
               const wikiEvidence = evidence.find(e => e.sourceName === 'Wikipedia');
-              const evidenceLine = wikiEvidence ? `I came across ${company.name} — ${wikiEvidence.snippet.slice(0, 200).replace(/\s+\S*$/, '')}…` : evidence.length ? `${company.name} came up in public discussion recently (${evidence[0].sourceName}: "${evidence[0].title}").` : `I came across ${company.name} and wanted to reach out directly.`;
-              const body = `Hi ${firstName},\n\n${evidenceLine} As ${exec.role.toLowerCase()} there, I'd guess ${useCase.useCase.toLowerCase()} is something your team thinks about.\n\nWe work with enterprise teams on AI-assisted ${useCase.useCase.toLowerCase()} — happy to share what we're seeing elsewhere and hear whether it's relevant at ${company.name} right now.\n\nOpen to a short call?\n\n{{sender_name}}`;
+              // A dated source (e.g. a 2017 Hacker News post) is never used
+              // to imply something is happening NOW — only cited as
+              // background when it's actually recent (<2 years old).
+              const TWO_YEARS_MS = 2 * 365 * 86400000;
+              const otherEvidence = evidence.find(e => e !== wikiEvidence);
+              const otherIsRecent = otherEvidence ? Date.now() - otherEvidence.sourceDate.getTime() < TWO_YEARS_MS : false;
+              const evidenceLine = wikiEvidence
+                ? `I came across ${company.name} — ${wikiEvidence.snippet.slice(0, 200).replace(/\s+\S*$/, '')}…`
+                : otherEvidence
+                  ? (otherIsRecent
+                    ? `${company.name} came up in public discussion recently (${otherEvidence.sourceName}: "${otherEvidence.title}").`
+                    : `For background, ${company.name} came up in a ${otherEvidence.sourceDate.getFullYear()} public discussion (${otherEvidence.sourceName}: "${otherEvidence.title}") — sharing as context, not a claim that anything is happening there right now.`)
+                  : `I came across ${company.name} and wanted to reach out directly.`;
+              const body = `Hi ${firstName},\n\n${evidenceLine} As ${exec.role.toLowerCase()} there, I'd guess ${useCase.useCase.toLowerCase()} is something your team thinks about.\n\nWe work with enterprise teams on AI-assisted ${useCase.useCase.toLowerCase()} — happy to share what we're seeing elsewhere and hear whether it's relevant at ${company.name} right now.\n\nOpen to a short call?\n\n— Wonderful`;
               const angle = `Ready to review — addressed to a real, Wikidata-verified contact (${exec.name}, ${exec.role}), grounded in ${evidence.length} real evidence item(s).`;
               const email = await tx.outreachMessage.create({ data: { prospectId: prospect.id, decisionMakerId: decisionMaker.id, channel: 'EMAIL', subject: `Wonderful × ${company.name}`, body, angle, status: 'AWAITING_APPROVAL' } });
               await tx.approvalItem.create({ data: { kind: 'OUTREACH_EMAIL', entityType: 'OutreachMessage', entityId: email.id, title: `Review draft for ${company.name} (real, verified contact)`, payloadJson: JSON.stringify(email) } });

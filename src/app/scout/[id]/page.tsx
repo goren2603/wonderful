@@ -354,7 +354,7 @@ export default function ProspectDetailPage() {
                 <OutreachCard key={m.id} message={m} onChanged={load} />
               ))}
               {prospect.outreach.length === 0 && (
-                <EmptyState title="No verified contact found" detail="Checked Wikidata for a real CEO/director claim for this company — none exists there, so no name was guessed and no outreach draft was created. If you know a real contact here, add them as a real target from the Growth Agent page." />
+                <EmptyState title="Current role not verified" detail="Checked Wikidata for a real, currently-holding CEO/director claim for this company — either none exists, or several past holders exist with no unambiguous current one, so no name was guessed and no outreach draft was created. If you know a real contact here, add them as a real target from the Growth Agent page." />
               )}
             </div>
           )}

@@ -66,8 +66,17 @@ function futureTime(iso: string | null): string {
   return new Date(iso).toLocaleString(undefined, { weekday: "short", hour: "2-digit", minute: "2-digit" });
 }
 
+interface BestProspect {
+  id: string;
+  companyName: string;
+  decisionMakers: { isReal: boolean; name: string }[];
+  outreach: unknown[];
+  opportunityScore: number;
+}
+
 export default function LauncherPage() {
   const [statuses, setStatuses] = useState<AgentStatus[] | null>(null);
+  const [bestProspect, setBestProspect] = useState<BestProspect | null>(null);
 
   useEffect(() => {
     let active = true;
@@ -83,6 +92,20 @@ export default function LauncherPage() {
     };
   }, []);
 
+  useEffect(() => {
+    // Points at whichever real, live-discovered account actually has a
+    // verified contact and a ready draft right now — never a fixed example,
+    // since which company qualifies changes as the agent runs.
+    fetch("/api/scout/prospects")
+      .then((r) => r.json())
+      .then((d: { prospects: BestProspect[] }) => {
+        const qualified = (d.prospects ?? []).filter((p) => p.decisionMakers?.some((dm) => dm.isReal) && p.outreach?.length > 0);
+        qualified.sort((a, b) => b.opportunityScore - a.opportunityScore);
+        if (qualified[0]) setBestProspect(qualified[0]);
+      })
+      .catch(() => {});
+  }, []);
+
   const statusFor = (key: string) => statuses?.find((s) => s.agent === key);
 
   return (
@@ -93,7 +116,29 @@ export default function LauncherPage() {
         <p className="mt-3 max-w-2xl text-base text-black/55">
           Three autonomous intelligence products, one shared digital workforce. Scheduled analysis, evidence-linked decisions, and approval-gated drafts. Start with a product below.
         </p>
+        {bestProspect && (
+          <Link href={`/scout/${bestProspect.id}`} className="mt-4 inline-flex items-center gap-2 rounded-full border border-scout/30 bg-scout-soft px-4 py-2 text-sm font-medium text-scout hover:-translate-y-0.5 transition">
+            Explore a researched prospect — {bestProspect.companyName} ({bestProspect.decisionMakers.find((dm) => dm.isReal)?.name}) →
+          </Link>
+        )}
       </header>
+
+      <section className="mb-12 rounded-xl2 border border-black/5 bg-white p-5 shadow-card">
+        <h2 className="mb-3 text-sm font-semibold text-black/70">How it works</h2>
+        <div className="grid grid-cols-1 gap-4 sm:grid-cols-4">
+          {[
+            { step: "1. Runs on schedule", detail: "Each agent wakes up on its own cron — no click needed.", manual: false },
+            { step: "2. Researches real sources", detail: "Live web/API lookups (Wikipedia, Hacker News, Wikidata) — never invented.", manual: false },
+            { step: "3. Saves evidence, prepares an action", detail: "Every score and draft cites what it's based on.", manual: false },
+            { step: "4. Waits for you", detail: "Approving, actually sending (email/LinkedIn), and recording replies/meetings are manual by design.", manual: true },
+          ].map((s) => (
+            <div key={s.step} className="text-xs">
+              <p className="mb-1 font-medium text-black/75">{s.step}{s.manual && <span className="ml-1 rounded-full bg-black/5 px-1.5 py-0.5 text-[10px] text-black/45">manual step</span>}</p>
+              <p className="text-black/50">{s.detail}</p>
+            </div>
+          ))}
+        </div>
+      </section>
 
       <section className="mb-16 grid grid-cols-1 gap-5 md:grid-cols-3">
         {PRODUCTS.map((p) => {

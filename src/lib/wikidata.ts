@@ -47,21 +47,50 @@ async function resolvePersonLabel(personId: string): Promise<string | null> {
   return data?.entities?.[personId]?.labels?.en?.value ?? null;
 }
 
+interface WikidataClaim {
+  mainsnak?: { datavalue?: { value?: { id?: string } } };
+  rank?: "preferred" | "normal" | "deprecated";
+  qualifiers?: { P582?: unknown[] }; // P582 = end time
+}
+
+/**
+ * A company can have many people who have held a role (P169 CEO, P1037
+ * director) over time — taking claims[0] picks whichever Wikidata happened
+ * to list first, which is NOT necessarily the current holder (concretely:
+ * ABN AMRO's P169 claims list its 2009-2017 CEO first). This selects the
+ * one claim that's actually still current:
+ *  - drop deprecated-rank claims entirely
+ *  - a "preferred"-rank claim (Wikidata's own way of marking the current
+ *    one when several exist) with no end-date qualifier wins outright
+ *  - otherwise, if exactly ONE remaining claim has no P582 (end time), it's
+ *    unambiguous — use it
+ *  - any other case (zero such claims, or more than one, and none marked
+ *    preferred) is genuinely ambiguous — return null rather than guess.
+ */
+function selectCurrentPersonId(claims: WikidataClaim[]): string | null {
+  const usable = claims.filter((c) => c.rank !== "deprecated" && c.mainsnak?.datavalue?.value?.id);
+  const preferredCurrent = usable.find((c) => c.rank === "preferred" && !c.qualifiers?.P582);
+  if (preferredCurrent) return preferredCurrent.mainsnak!.datavalue!.value!.id!;
+  const noEndDate = usable.filter((c) => !c.qualifiers?.P582);
+  if (noEndDate.length === 1) return noEndDate[0].mainsnak!.datavalue!.value!.id!;
+  return null; // ambiguous or all historical — don't guess
+}
+
 export async function findVerifiedExecutive(companyName: string): Promise<VerifiedExecutive | null> {
   const entityId = await findCompanyEntityId(companyName);
   if (!entityId) return null;
   const data = await fetchJson(`https://www.wikidata.org/wiki/Special:EntityData/${entityId}.json`);
   const claims = data?.entities?.[entityId]?.claims;
   if (!claims) return null;
-  const ceoClaim = claims.P169?.[0]?.mainsnak?.datavalue?.value?.id as string | undefined;
-  const directorClaim = claims.P1037?.[0]?.mainsnak?.datavalue?.value?.id as string | undefined;
-  const personId = ceoClaim ?? directorClaim;
+  const ceoId = selectCurrentPersonId(claims.P169 ?? []);
+  const directorId = selectCurrentPersonId(claims.P1037 ?? []);
+  const personId = ceoId ?? directorId;
   if (!personId) return null;
   const name = await resolvePersonLabel(personId);
   if (!name) return null;
   return {
     name,
-    role: ceoClaim ? "Chief Executive Officer" : "Director / Manager",
+    role: ceoId ? "Chief Executive Officer" : "Director / Manager",
     sourceUrl: `https://www.wikidata.org/wiki/${entityId}`,
     personSourceUrl: `https://www.wikidata.org/wiki/${personId}`,
   };

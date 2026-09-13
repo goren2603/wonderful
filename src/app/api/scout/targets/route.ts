@@ -16,7 +16,12 @@ function composeResearchNote(companyName: string, vertical: string, evidence: Ev
     return `A bit about ${companyName}, from Wikipedia: "${summary}"${useCase ? ` Given that, I'd guess ${useCase.useCase.toLowerCase()} could be a live priority for your team — happy to be corrected.` : ""}`;
   }
   if (evidence.length > 0) {
-    return `I saw ${companyName} come up in public discussion recently (${evidence[0].sourceName}: "${evidence[0].title}") — worth a quick look before you rely on it, but it's what surfaced.${useCase ? ` Separately, ${useCase.useCase.toLowerCase()} is often a live priority for companies your size — is that true at ${companyName}?` : ""}`;
+    const item = evidence[0];
+    const isRecent = Date.now() - item.sourceDate.getTime() < 2 * 365 * 86400000;
+    const mention = isRecent
+      ? `I saw ${companyName} come up in public discussion recently (${item.sourceName}: "${item.title}")`
+      : `For background, ${companyName} came up in a ${item.sourceDate.getFullYear()} public discussion (${item.sourceName}: "${item.title}") — sharing as context, not a claim that anything is happening there right now`;
+    return `${mention} — worth a quick look before you rely on it, but it's what surfaced.${useCase ? ` Separately, ${useCase.useCase.toLowerCase()} is often a live priority for companies your size — is that true at ${companyName}?` : ""}`;
   }
   return `[No public research was found automatically for ${companyName} — add a specific, real reason this matters before sending.]`;
 }
@@ -89,7 +94,7 @@ export async function POST(req: Request) {
           },
         });
         const researchNote = composeResearchNote(companyName, vertical, liveEvidence);
-        const body = `Hi ${personName.split(" ")[0]},\n\nI'm reaching out from Wonderful — we help enterprise teams apply AI to customer service, support, and operational workflows.\n\n${researchNote}\n\nOpen to a short conversation?\n\n{{sender_name}}`;
+        const body = `Hi ${personName.split(" ")[0]},\n\nI'm reaching out from Wonderful — we help enterprise teams apply AI to customer service, support, and operational workflows.\n\n${researchNote}\n\nOpen to a short conversation?\n\n— Wonderful`;
         const ready = liveEvidence.length > 0;
         outreach = await tx.outreachMessage.create({
           data: {
