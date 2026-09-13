@@ -43,11 +43,13 @@ export function parseCsv(text: string): Record<string, string>[] {
       field += ch;
     }
   }
+  if (inQuotes) throw new Error("Unclosed quoted CSV field");
   if (field.length > 0 || row.length > 0) pushRow();
 
   const filtered = rows.filter((r) => r.some((c) => c.trim().length > 0));
   if (filtered.length === 0) return [];
-  const headers = filtered[0].map((h) => h.trim());
+  const headers = filtered[0].map((h) => h.replace(/^\uFEFF/, "").trim());
+  if(headers.some(h=>!h)||new Set(headers).size!==headers.length) throw new Error("CSV headers must be nonempty and unique");
   return filtered.slice(1).map((r) => {
     const obj: Record<string, string> = {};
     headers.forEach((h, i) => (obj[h] = (r[i] ?? "").trim()));
@@ -56,6 +58,7 @@ export function parseCsv(text: string): Record<string, string>[] {
 }
 
 export const CANDIDATE_CSV_TEMPLATE_HEADERS = [
+  "candidateId",
   "name",
   "currentTitle",
   "yearsExperience",

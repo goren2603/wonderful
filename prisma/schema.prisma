@@ -115,10 +115,13 @@ model Candidate {
   yearsExperience       Float
   education             String
   previousCompaniesJson String   @default("[]")
-  startupExperience     Boolean  @default(false)
+  startupExperience     Boolean  @default(false) // "0→1 startup experience" in Sourcing Optimizer UI
+  eliteUniversity       Boolean  @default(false)
+  priorLeadership       Boolean  @default(false)
   technicalDomain       String
   geography             String
-  originalSourcingScore Float
+  originalSourcingScore Float // "Model V1" output
+  isNewBatch            Boolean  @default(false) // recent, not-yet-decided candidates used for the V1-vs-V2 ranking demo
   createdAt             DateTime @default(now())
 
   interviews  InterviewOutcome[]
@@ -155,6 +158,12 @@ model PerformanceRecord {
   retentionMonths         Float?
   managerRating           Float? // 1..5
   promotionVelocityMonths Float?
+  stillEmployed           Boolean   @default(true)
+  department              String?
+  roleHiredInto           String?
+  currentRole             String?
+  promotions              Int       @default(0)
+  highPerformer           Boolean   @default(false) // managerRating >= 4.0 — see Sourcing Optimizer UI for the exact rule
   customMetricsJson       String    @default("{}")
   recordedAt              DateTime  @default(now())
 }
@@ -198,6 +207,26 @@ model LearnedRanking {
   @@index([candidateId])
 }
 
+// Headline "Model V1 vs proposed Model V2" validation result — one row per
+// analysis run. This is the source of truth for the Sourcing Optimizer's
+// first screen. See src/lib/talentModel.ts `evaluateModelVersions`.
+model SourcingModelEvaluation {
+  id                     String    @id @default(cuid())
+  runId                  String
+  generatedAt            DateTime  @default(now())
+  candidatesReviewed     Int
+  hiresAnalyzed          Int
+  trainSize              Int
+  holdoutSize            Int
+  kUsed                  Int
+  v1Precision            Float
+  v2Precision            Float
+  improvementPct         Float?
+  validationStatus       String // PASSED | FAILED | INSUFFICIENT_DATA
+  highPerformerDefinition String
+  factorAuditJson        String @default("[]")
+}
+
 // ─────────────────────────────────────────────────────────────
 // PRODUCT 2 — COMPANY SCOUT
 // ─────────────────────────────────────────────────────────────
@@ -239,31 +268,41 @@ model ScoreHistory {
 }
 
 model DecisionMaker {
-  id          String   @id @default(cuid())
-  prospectId  String
-  prospect    Prospect @relation(fields: [prospectId], references: [id])
-  name        String
-  title       String
-  linkedinUrl String?
-  confidence  Float
+  id            String   @id @default(cuid())
+  prospectId    String
+  prospect      Prospect @relation(fields: [prospectId], references: [id])
+  name          String
+  title         String
+  linkedinUrl   String?
+  email         String?
+  confidence    Float
+  whyThisPerson String? // rationale for why this role/person is the right buyer
+  isReal        Boolean  @default(false) // a real, user-supplied named target (not a role hypothesis)
+
+  outreach OutreachMessage[]
 
   @@index([prospectId])
 }
 
 model OutreachMessage {
-  id         String    @id @default(cuid())
-  prospectId String
-  prospect   Prospect  @relation(fields: [prospectId], references: [id])
-  channel    String // OutreachChannel: EMAIL | LINKEDIN
-  subject    String?
-  body       String
-  angle      String
-  status     String    @default("DRAFT") // OutreachStatus
-  createdAt  DateTime  @default(now())
-  approvedAt DateTime?
-  sentAt     DateTime?
+  id              String    @id @default(cuid())
+  prospectId      String
+  prospect        Prospect  @relation(fields: [prospectId], references: [id])
+  decisionMakerId String?
+  decisionMaker   DecisionMaker? @relation(fields: [decisionMakerId], references: [id])
+  channel         String // OutreachChannel: EMAIL | LINKEDIN
+  subject         String?
+  body            String
+  angle           String
+  status          String    @default("DRAFT") // OutreachStatus
+  createdAt       DateTime  @default(now())
+  approvedAt      DateTime?
+  sentAt          DateTime?
+  replyNote       String?
+  nextAction      String?
 
   @@index([prospectId])
+  @@index([decisionMakerId])
 }
 
 // ─────────────────────────────────────────────────────────────
@@ -333,12 +372,13 @@ model Alert {
   themeId           String?
   theme             Theme?   @relation(fields: [themeId], references: [id])
   title             String
-  type              String // AlertType: RISK | OPPORTUNITY
+  type              String // AlertType: RISK | OPPORTUNITY | PRODUCT_SIGNAL
   severity          String // Severity: LOW | MEDIUM | HIGH
   confidence        String // ConfidenceLevel: LOW | MEDIUM | HIGH
   evidenceCount     Int
   baseline          String
   trend             String
+  state             String   @default("STABLE") // WORSENING | IMPROVING | STABLE | RESOLVED
   aiExplanation     String
   recommendedAction String
   status            String   @default("OPEN") // AlertStatus

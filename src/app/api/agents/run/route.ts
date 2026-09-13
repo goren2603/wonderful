@@ -2,6 +2,7 @@ import { NextResponse } from "next/server";
 import { triggerAgentRun } from "@/lib/scheduler";
 import { COUNTRIES, VERTICALS } from "@/lib/seedData/prospects";
 import type { AgentKey } from "@/lib/types";
+import { AGENT_KEYS } from "@/lib/types";
 import { runCompanyScoutScan } from "@/lib/agents/scoutAgent";
 
 // Vercel Cron (or any external scheduler) hits this with GET and, when
@@ -10,7 +11,8 @@ import { runCompanyScoutScan } from "@/lib/agents/scoutAgent";
 export async function GET(req: Request) {
   const { searchParams } = new URL(req.url);
   const agentKey = searchParams.get("agentKey") as AgentKey | null;
-  if (!agentKey) return NextResponse.json({ error: "agentKey query param required" }, { status: 400 });
+  if (!agentKey || !AGENT_KEYS.includes(agentKey)) return NextResponse.json({ error: "valid agentKey required" }, { status: 400 });
+  if (!process.env.CRON_SECRET) return NextResponse.json({error:"External cron is disabled until CRON_SECRET is configured"},{status:503});
 
   if (process.env.CRON_SECRET) {
     const auth = req.headers.get("authorization");
@@ -30,7 +32,7 @@ export async function GET(req: Request) {
 export async function POST(req: Request) {
   const body = await req.json().catch(() => ({}));
   const agentKey = body.agentKey as AgentKey | undefined;
-  if (!agentKey) return NextResponse.json({ error: "agentKey required" }, { status: 400 });
+  if (!agentKey || !AGENT_KEYS.includes(agentKey)) return NextResponse.json({ error: "valid agentKey required" }, { status: 400 });
 
   try {
     if (agentKey === "COMPANY_SCOUT" && (body.countries || body.verticals)) {

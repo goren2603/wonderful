@@ -1,261 +1,72 @@
-import { db } from "@/lib/db";
-import { rngFor } from "@/lib/random";
-import {
-  SEED_COMPANIES,
-  SIGNAL_LIBRARY,
-  USE_CASE_BY_VERTICAL,
-  DECISION_MAKER_TITLES_BY_VERTICAL,
-  type Country,
-  type Vertical,
-} from "@/lib/seedData/prospects";
-import type { ScoreComponent, AgentStep } from "@/lib/types";
-
-export interface ScoutScanParams {
-  countries: Country[];
-  verticals: Vertical[];
-  limit?: number;
-}
-
-function parseEmployeeScale(estimate: string): number {
-  const n = parseInt(estimate.replace(/[^0-9]/g, ""), 10) || 1000;
-  if (n >= 100000) return 20;
-  if (n >= 50000) return 18;
-  if (n >= 15000) return 15;
-  if (n >= 5000) return 12;
-  return 8;
-}
-
-function scoreCompany(company: (typeof SEED_COMPANIES)[number]): {
-  score: number;
-  breakdown: ScoreComponent[];
-} {
-  const rng = rngFor(`${company.name}:${company.country}`);
-  const signals = SIGNAL_LIBRARY[company.vertical];
-
-  const operationalPain = Math.round(14 + rng() * 11); // /25
-  const scale = parseEmployeeScale(company.employeeCountEstimate); // /20
-  const aiReadiness = Math.round(8 + rng() * 12); // /20
-  const multilingual = Math.round(8 + rng() * 7); // /15
-  const urgency = Math.round(6 + rng() * 9); // /15
-  const execAccess = Math.round(2 + rng() * 3); // /5
-
-  const breakdown: ScoreComponent[] = [
-    {
-      label: "Operational pain",
-      score: operationalPain,
-      max: 25,
-      why: signals[0],
-      evidenceIds: [],
-    },
-    {
-      label: "Company scale",
-      score: scale,
-      max: 20,
-      why: `Estimated headcount ${company.employeeCountEstimate} — larger organizations carry more operational surface area for AI-assisted workflows.`,
-      evidenceIds: [],
-    },
-    {
-      label: "AI readiness",
-      score: aiReadiness,
-      max: 20,
-      why: signals[1],
-      evidenceIds: [],
-    },
-    {
-      label: "Multilingual complexity",
-      score: multilingual,
-      max: 15,
-      why: signals[2],
-      evidenceIds: [],
-    },
-    {
-      label: "Urgency / growth",
-      score: urgency,
-      max: 15,
-      why: signals[3],
-      evidenceIds: [],
-    },
-    {
-      label: "Executive accessibility",
-      score: execAccess,
-      max: 5,
-      why: "Estimated based on public leadership visibility and org structure signals.",
-      evidenceIds: [],
-    },
-  ];
-
-  const score = breakdown.reduce((a, b) => a + b.score, 0);
-  return { score, breakdown };
-}
-
+import { db } from '@/lib/db';
+import { getResearchProvider } from '@/lib/research';
+import { withAgentLease, retry } from '@/lib/agentRuntime';
+import { scoreCompany, dedupeCompany } from '@/lib/scoutScoring';
+import { COUNTRIES, VERTICALS, USE_CASE_BY_VERTICAL, DECISION_MAKER_TITLES_BY_VERTICAL, type Country, type Vertical } from '@/lib/seedData/prospects';
+import type { AgentStep } from '@/lib/types';
+export interface ScoutScanParams { countries: Country[]; verticals: Vertical[]; limit?: number }
 export async function runCompanyScoutScan(params: ScoutScanParams) {
-  const startedAt = new Date();
-  const steps: AgentStep[] = [];
-  const pushStep = (label: string, detail: string) =>
-    steps.push({ label, detail, at: new Date().toISOString() });
-
-  const run = await db.agentRun.create({
-    data: {
-      agent: "COMPANY_SCOUT",
-      goal: `Scan ${params.countries.join(", ")} across ${params.verticals.join(", ")}`,
-      status: "RUNNING",
-      stepsJson: "[]",
-    },
-  });
-
-  let sourcesChecked = 0;
-  let entitiesFound = 0;
-  let entitiesAccepted = 0;
-  let actionsCreated = 0;
-  const warnings: string[] = [];
-
-  try {
-    pushStep("Discovering", `Scanning target company universe for ${params.countries.join(", ")}.`);
-    const candidates = SEED_COMPANIES.filter(
-      (c) => params.countries.includes(c.country) && params.verticals.includes(c.vertical)
-    ).slice(0, params.limit ?? 12);
-    entitiesFound = candidates.length;
-
-    pushStep("Researching", `Gathering public signals for ${candidates.length} candidate companies.`);
-
-    for (const company of candidates) {
-      sourcesChecked += 3;
-      const dedupeKey = `${company.name}::${company.country}`;
-      const existing = await db.prospect.findUnique({ where: { dedupeKey } });
-      if (existing) {
-        warnings.push(`Skipped duplicate: ${company.name} (${company.country}) already tracked.`);
-        continue;
+  if (!Array.isArray(params.countries) || !params.countries.length || params.countries.some(c=>!COUNTRIES.includes(c)) || !Array.isArray(params.verticals) || !params.verticals.length || params.verticals.some(v=>!VERTICALS.includes(v)) || !Number.isInteger(params.limit??12) || (params.limit??12)<1 || (params.limit??12)>50) throw new Error('Invalid scan scope: choose supported countries/sectors and limit 1–50');
+  return withAgentLease('COMPANY_SCOUT', async()=>{
+    const provider=getResearchProvider();
+    const run=await db.agentRun.create({data:{agent:'COMPANY_SCOUT',goal:`Scan ${params.countries.join(', ')} / ${params.verticals.join(', ')}`}});
+    const steps:AgentStep[]=[];
+    const step=async(label:string,detail:string)=>{steps.push({label,detail,at:new Date().toISOString()});await db.agentRun.update({where:{id:run.id},data:{stepsJson:JSON.stringify(steps)}});};
+    let sourcesChecked=0,entitiesAccepted=0,actionsCreated=0,refreshed=0;
+    try {
+      await step('Discovering',`Using ${provider.name} directory. Countries and sectors are actual discovery filters.`);
+      const universe=await retry(()=>provider.discover(params.countries,params.verticals));
+      const tracked=await db.prospect.findMany();
+      // New companies first, then least recently researched. Repeated scans advance through the universe.
+      const existingFor=(c:typeof universe[number])=>tracked.find(p=>dedupeCompany(p.companyName,p.country)===dedupeCompany(c.name,c.country));
+      const candidates=universe.sort((a,b)=>(existingFor(a)?.lastUpdatedAt.getTime()??0)-(existingFor(b)?.lastUpdatedAt.getTime()??0)||a.name.localeCompare(b.name)).slice(0,params.limit??12);
+      for(const company of candidates) {
+        await step('Researching',`${company.name}: obtaining illustrative evidence from ${provider.name} provider; no web pages fetched in demo mode.`);
+        const items=await retry(()=>provider.research(company));
+        sourcesChecked+=items.length;
+        const existing=existingFor(company);
+        await db.$transaction(async tx=>{
+          const prospect=existing??await tx.prospect.create({data:{companyName:company.name,dedupeKey:dedupeCompany(company.name,company.country),country:company.country,vertical:company.vertical,website:company.website,employeeCountEstimate:company.employeeCountEstimate,runId:run.id}});
+          const evidence=[];
+          for(const item of items) {
+            const previous=await tx.evidence.findFirst({where:{entityType:'PROSPECT',entityId:prospect.id,sourceUrl:item.sourceUrl,snippet:item.snippet}});
+            evidence.push(previous??await tx.evidence.create({data:{...item,entityType:'PROSPECT',entityId:prospect.id,provider:provider.name}}));
+          }
+          const {score,breakdown}=scoreCompany(company,evidence);
+          const useCase=USE_CASE_BY_VERTICAL[company.vertical];
+          await tx.prospect.update({where:{id:prospect.id},data:{opportunityScore:score,scoreBreakdownJson:JSON.stringify(breakdown),useCase:useCase.useCase,useCaseRationale:useCase.rationale,status:existing?.status==='NEW'?'SCORED':existing?.status??'SCORED',whyJson:JSON.stringify([`${company.employeeCountEstimate} unverified directory headcount in ${company.country}.`,`${company.vertical} workflow-fit prior; validate the actual operating model.`,`${score}/100 from scoring rules v2 and ${evidence.length} illustrative evidence items.`]),runId:run.id}});
+          await tx.scoreHistory.create({data:{prospectId:prospect.id,score,breakdownJson:JSON.stringify(breakdown)}});
+          // Repair early demo drafts that asserted unsupported research. Never overwrite approved/sent text.
+          const drafts=await tx.outreachMessage.findMany({where:{prospectId:prospect.id,status:{in:['DRAFT','AWAITING_APPROVAL']}}});
+          for(const draft of drafts) {
+            if(draft.body.includes("I've been following")||draft.body.includes('noticed ')) {
+              const body=`Hi {{decision_maker_first_name}},\n\nIs ${useCase.useCase.toLowerCase()} a priority at ${company.name}? We would welcome a conversation about where Wonderful might help.\n\n{{sender_name}}`;
+              await tx.outreachMessage.update({where:{id:draft.id},data:{body,angle:'Workflow-fit hypothesis; company pain points remain unverified.'}});
+              await tx.auditLogEntry.create({data:{actor:'agent',action:'unsupported_draft_revised',entityType:'OutreachMessage',entityId:draft.id,detailJson:JSON.stringify({runId:run.id,before:draft.body,after:body})}});
+            }
+            if(draft.status==='AWAITING_APPROVAL'&&!await tx.approvalItem.findFirst({where:{entityId:draft.id,status:'PENDING'}})) await tx.approvalItem.create({data:{kind:'OUTREACH_EMAIL',entityType:'OutreachMessage',entityId:draft.id,title:`Review draft for ${company.name}`,payloadJson:JSON.stringify(draft)}});
+          }
+          if(!existing) {
+            const makers=[];
+            for(const title of DECISION_MAKER_TITLES_BY_VERTICAL[company.vertical].slice(0,2)) makers.push(await tx.decisionMaker.create({data:{prospectId:prospect.id,name:'Unverified buying-role hypothesis',title,confidence:0,whyThisPerson:`${title} typically owns ${useCase.useCase.toLowerCase()} decisions at a company this size; no named individual has been verified yet.`}}));
+            const primary=makers[0];
+            const angle=`Explore whether ${useCase.useCase.toLowerCase()} is a priority at ${company.name}; the scenario is not verified research.`;
+            const body=`Hi {{decision_maker_first_name}},\n\nI work with enterprise teams exploring AI-assisted ${useCase.useCase.toLowerCase()}. Is this an operational priority for ${company.name}?\n\nIf useful, we could compare your current workflow and discuss where Wonderful might help.\n\nOpen to a short conversation?\n\n{{sender_name}}`;
+            const email=await tx.outreachMessage.create({data:{prospectId:prospect.id,decisionMakerId:primary?.id,channel:'EMAIL',subject:`Exploring ${useCase.useCase.split(' / ')[0].toLowerCase()} at ${company.name}`,body,angle,status:'AWAITING_APPROVAL'}});
+            await tx.approvalItem.create({data:{kind:'OUTREACH_EMAIL',entityType:'OutreachMessage',entityId:email.id,title:`Review draft for ${company.name} (does not send)`,payloadJson:JSON.stringify(email)}});
+            await tx.outreachMessage.create({data:{prospectId:prospect.id,decisionMakerId:primary?.id,channel:'LINKEDIN',body,angle,status:'DRAFT'}});
+          }
+          await tx.auditLogEntry.create({data:{actor:'agent',action:existing?'prospect_rescored':'prospect_discovered',entityType:'Prospect',entityId:prospect.id,detailJson:JSON.stringify({runId:run.id,score,provider:provider.name,evidenceIds:evidence.map(e=>e.id)})}});
+        },{timeout:15000});
+        if(existing) refreshed++; else entitiesAccepted++;
+        actionsCreated+=existing?1:3;
+        await step('Scoring',`${company.name}: saved evidence-linked rules and a new score-history snapshot.${existing?' Existing outreach and human state preserved.':' Buying-role hypotheses and approval-gated drafts saved.'}`);
       }
-
-      const { score, breakdown } = scoreCompany(company);
-      const useCase = USE_CASE_BY_VERTICAL[company.vertical];
-      const titles = DECISION_MAKER_TITLES_BY_VERTICAL[company.vertical];
-      const signals = SIGNAL_LIBRARY[company.vertical];
-
-      const why = [
-        `${company.employeeCountEstimate} estimated employees across ${company.country} and adjacent markets.`,
-        signals[0],
-        signals[1],
-        `Opportunity score ${score}/100 driven primarily by ${breakdown
-          .slice()
-          .sort((a, b) => b.score / b.max - a.score / a.max)[0].label.toLowerCase()}.`,
-      ];
-
-      const prospect = await db.prospect.create({
-        data: {
-          companyName: company.name,
-          dedupeKey,
-          country: company.country,
-          vertical: company.vertical,
-          website: company.website,
-          employeeCountEstimate: company.employeeCountEstimate,
-          opportunityScore: score,
-          scoreBreakdownJson: JSON.stringify(breakdown),
-          useCase: useCase.useCase,
-          useCaseRationale: useCase.rationale,
-          status: "SCORED",
-          whyJson: JSON.stringify(why),
-          runId: run.id,
-        },
-      });
-      entitiesAccepted++;
-      actionsCreated++;
-
-      await db.scoreHistory.create({
-        data: { prospectId: prospect.id, score, breakdownJson: JSON.stringify(breakdown) },
-      });
-
-      // Evidence — always a real root domain, always labeled demo.
-      const evidenceTexts = [signals[0], signals[1], signals[2]];
-      for (const text of evidenceTexts) {
-        await db.evidence.create({
-          data: {
-            entityType: "PROSPECT",
-            entityId: prospect.id,
-            sourceUrl: company.website,
-            sourceName: `${company.name} — public signal (sample)`,
-            sourceDate: new Date(),
-            title: `Public signal: ${company.name}`,
-            snippet: text,
-            confidence: Math.round((0.6 + rngFor(text)() * 0.3) * 100) / 100,
-            provider: "demo",
-            isDemo: true,
-          },
-        });
-      }
-
-      pushStep("Scoring", `${company.name}: opportunity score ${score}/100.`);
-
-      // Decision-maker roles — role-based, not a fabricated named individual.
-      pushStep("Finding decision makers", `Identifying likely buying roles at ${company.name}.`);
-      for (const title of titles.slice(0, 2)) {
-        await db.decisionMaker.create({
-          data: {
-            prospectId: prospect.id,
-            name: "Pending live research",
-            title,
-            linkedinUrl: null,
-            confidence: Math.round((0.5 + rngFor(title + company.name)() * 0.3) * 100) / 100,
-          },
-        });
-      }
-
-      // Outreach draft
-      pushStep("Preparing outreach", `Drafting personalized outreach angle for ${company.name}.`);
-      const angle = `${company.name}'s scale in ${company.country} plus ${useCase.useCase.toLowerCase()} pain points make this a strong fit for Wonderful's AI operations layer.`;
-      const body = `Hi {{decision_maker_first_name}},\n\nI've been following ${company.name}'s operations in ${company.country} — ${signals[0].toLowerCase()} ${signals[1].toLowerCase()}\n\nWonderful helps enterprises like yours apply AI to ${useCase.useCase.toLowerCase()}, without ripping out existing systems. Given ${company.name}'s scale (${company.employeeCountEstimate} employees), I think there's a strong fit.\n\nOpen to a short conversation?\n\nBest,\n{{sender_name}}`;
-      await db.outreachMessage.create({
-        data: {
-          prospectId: prospect.id,
-          channel: "EMAIL",
-          subject: `AI for ${company.name}'s ${useCase.useCase.split(" / ")[0].toLowerCase()} operations`,
-          body,
-          angle,
-          status: "AWAITING_APPROVAL",
-        },
-      });
-      actionsCreated++;
-      await db.outreachMessage.create({
-        data: {
-          prospectId: prospect.id,
-          channel: "LINKEDIN",
-          subject: null,
-          body: `Hi — I work with enterprises on AI-assisted operations and noticed ${company.name}'s scale in ${company.country}. ${signals[0]} Worth a quick chat about ${useCase.useCase.toLowerCase()}?`,
-          angle,
-          status: "DRAFT",
-        },
-      });
-      actionsCreated++;
+      const summary=`${provider.name==='demo'?'Demo directory':'Research'}: ${candidates.length} companies evaluated, ${entitiesAccepted} new, ${refreshed} refreshed. ${sourcesChecked} evidence items examined; ${provider.name==='demo'?'0 web pages fetched.':'See evidence URLs.'}`;
+      await db.agentRun.update({where:{id:run.id},data:{status:'SUCCEEDED',endedAt:new Date(),durationMs:Date.now()-run.startedAt.getTime(),sourcesChecked,entitiesFound:candidates.length,entitiesAccepted,actionsCreated,summary,warningsJson:JSON.stringify(provider.name==='demo'?['Synthetic evidence; scores represent scenario fit, not verified opportunity. Live discovery and contact enrichment require implemented adapters.']:[]),stepsJson:JSON.stringify(steps)}});
+      return {runId:run.id,entitiesFound:candidates.length,entitiesAccepted,actionsCreated,refreshed};
+    } catch(err) {
+      await db.agentRun.update({where:{id:run.id},data:{status:'FAILED',endedAt:new Date(),durationMs:Date.now()-run.startedAt.getTime(),errorMessage:err instanceof Error?err.message:String(err),stepsJson:JSON.stringify(steps)}});throw err;
     }
-
-    const durationMs = Date.now() - startedAt.getTime();
-    await db.agentRun.update({
-      where: { id: run.id },
-      data: {
-        status: "SUCCEEDED",
-        endedAt: new Date(),
-        durationMs,
-        sourcesChecked,
-        entitiesFound,
-        entitiesAccepted,
-        actionsCreated,
-        warningsJson: JSON.stringify(warnings),
-        stepsJson: JSON.stringify(steps),
-        summary: `Found ${entitiesFound} companies, accepted ${entitiesAccepted} new prospects, prepared ${actionsCreated} actions.`,
-      },
-    });
-
-    return { runId: run.id, entitiesAccepted, entitiesFound, actionsCreated };
-  } catch (err) {
-    await db.agentRun.update({
-      where: { id: run.id },
-      data: {
-        status: "FAILED",
-        endedAt: new Date(),
-        errorMessage: err instanceof Error ? err.message : String(err),
-        stepsJson: JSON.stringify(steps),
-      },
-    });
-    throw err;
-  }
+  });
 }

@@ -51,6 +51,7 @@ class AnthropicLLMProvider implements LLMProvider {
 
   async complete(req: LLMRequest): Promise<LLMResult> {
     const res = await fetch("https://api.anthropic.com/v1/messages", {
+      signal: AbortSignal.timeout(15000),
       method: "POST",
       headers: {
         "content-type": "application/json",
@@ -65,7 +66,7 @@ class AnthropicLLMProvider implements LLMProvider {
       }),
     });
     if (!res.ok) {
-      throw new Error(`Anthropic API error ${res.status}: ${await res.text()}`);
+      throw new Error(`Anthropic API error ${res.status}`);
     }
     const data = (await res.json()) as { content: { type: string; text?: string }[] };
     const text = data.content.find((c) => c.type === "text")?.text ?? "";

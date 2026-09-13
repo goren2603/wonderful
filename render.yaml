@@ -6,7 +6,7 @@ services:
     dockerfilePath: ./Dockerfile
     envVars:
       - key: DATABASE_URL
-        value: file:./prisma/dev.db
+        value: file:/app/data/dev.db
       - key: NODE_ENV
         value: production
       # Optional — leave unset to run in demo mode (see README).

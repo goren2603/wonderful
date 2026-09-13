@@ -1,7 +1,21 @@
-// Synthetic (clearly demo) candidate history for Talent Intelligence.
-// Generated with deliberate, documented correlations so the statistics
-// engine has real signal to find — not random noise, and not hand-picked
-// per-insight, so the analysis step still has to go find it.
+// Synthetic (clearly demo) candidate history for the Sourcing Optimizer.
+//
+// Generated with two DIFFERENT, deliberately only-partly-overlapping signal
+// mixes so the audit has something real to find — not hand-picked per
+// insight:
+//
+//   sourcingDriver — what Model V1 (originalSourcingScore) rewards, and what
+//   actually got a candidate through the interview process in this dataset's
+//   history: elite-university background, years of experience, a
+//   high-signal technical domain.
+//
+//   trueQualityDriver — what actually predicts what happened AFTER hire
+//   (retention, manager rating, promotion, high-performer outcome): prior
+//   leadership experience and 0→1 startup experience, plus a much smaller
+//   contribution from years of experience. Elite-university background is
+//   deliberately NOT part of this mix — by construction it has ~zero true
+//   relationship to post-hire success, even though it strongly influenced
+//   who got hired. That gap is exactly what the audit is supposed to find.
 
 export interface SeedCandidate {
   name: string;
@@ -9,7 +23,9 @@ export interface SeedCandidate {
   yearsExperience: number;
   education: string;
   previousCompanies: string[];
-  startupExperience: boolean;
+  startupExperience: boolean; // "0→1 startup experience"
+  eliteUniversity: boolean;
+  priorLeadership: boolean;
   technicalDomain: string;
   geography: string;
   originalSourcingScore: number;
@@ -20,6 +36,12 @@ export interface SeedCandidate {
   retentionMonths?: number;
   managerRating?: number; // 1..5
   promotionVelocityMonths?: number;
+  promotions?: number;
+  stillEmployed?: boolean;
+  department?: string;
+  roleHiredInto?: string;
+  currentRole?: string;
+  highPerformer?: boolean;
 }
 
 const FIRST_NAMES = [
@@ -42,61 +64,81 @@ function mulberry32(seed: number) {
   };
 }
 
-const rand = mulberry32(20260913);
-const pick = <T,>(arr: readonly T[]) => arr[Math.floor(rand() * arr.length)];
-const between = (min: number, max: number) => min + rand() * (max - min);
-const chance = (p: number) => rand() < p;
-
 const DOMAINS = ["Backend", "Frontend", "Data/ML", "DevOps/Infra", "Mobile", "Full-stack"];
 const GEOS = ["Germany", "United Kingdom", "France", "Netherlands", "Remote-EU"];
-const EDUCATION = ["BSc Computer Science", "MSc Computer Science", "Bootcamp", "Self-taught", "PhD", "BSc Engineering"];
+const EDUCATION_ELITE = ["MSc Computer Science (top-20 global program)", "PhD (top-20 global program)"];
+const EDUCATION_OTHER = ["BSc Computer Science", "MSc Computer Science", "Bootcamp", "Self-taught", "BSc Engineering"];
 const COMPANIES = [
   "Deutsche Telekom", "Spotify", "Klarna", "N26", "Zalando", "Booking.com", "Revolut", "Adyen",
   "SAP", "small startup (seed stage)", "small startup (Series A)", "Siemens", "Delivery Hero",
   "local agency", "freelance", "Amazon", "Google", "Criteo", "Contentful", "GetYourGuide",
 ];
+const DEPARTMENT_BY_DOMAIN: Record<string, string> = {
+  Backend: "Engineering", "DevOps/Infra": "Platform Engineering", "Data/ML": "Data & Analytics",
+  Frontend: "Product Engineering", Mobile: "Product Engineering", "Full-stack": "Engineering",
+};
 
-export function generateSeedCandidates(count = 220): SeedCandidate[] {
+function clamp(min: number, max: number, v: number) {
+  return Math.max(min, Math.min(max, v));
+}
+
+function makeGenerator(seed: number) {
+  const rand = mulberry32(seed);
+  const pick = <T,>(arr: readonly T[]) => arr[Math.floor(rand() * arr.length)];
+  const between = (min: number, max: number) => min + rand() * (max - min);
+  const chance = (p: number) => rand() < p;
+  return { rand, pick, between, chance };
+}
+
+/** Historical candidates: full pre-hire profile plus (for hired candidates) real post-hire outcomes. */
+export function generateSeedCandidates(count = 400): SeedCandidate[] {
+  const { pick, between, chance } = makeGenerator(20260913);
   const out: SeedCandidate[] = [];
+
   for (let i = 0; i < count; i++) {
-    const startupExperience = chance(0.4);
+    const startupExperience = chance(0.35);
+    const eliteUniversity = chance(0.3);
+    const priorLeadership = chance(0.35);
     const yearsExperience = Math.round(between(0.5, 16) * 10) / 10;
     const domain = pick(DOMAINS);
     const geography = pick(GEOS);
-    const education = pick(EDUCATION);
+    const education = eliteUniversity ? pick(EDUCATION_ELITE) : pick(EDUCATION_OTHER);
     const numPrev = Math.floor(between(1, 4));
     const previousCompanies = Array.from({ length: numPrev }, () => pick(COMPANIES));
 
-    // Ground-truth signal baked into generation (the agent has to discover
-    // this from the data — it isn't told these weights):
-    // startup experience and prior interview performance correlate with
-    // retention + manager rating; years of experience alone barely does;
-    // original sourcing score is only weakly related to actual performance.
-    const latentQuality =
-      (startupExperience ? 0.9 : 0) +
-      Math.min(yearsExperience, 8) * 0.12 +
+    // What Model V1 rewards, and what actually got candidates through the
+    // process historically.
+    const sourcingDriver =
+      (eliteUniversity ? 1.6 : 0) +
+      Math.min(yearsExperience, 10) * 0.15 +
       (domain === "Data/ML" || domain === "Backend" ? 0.3 : 0) +
-      between(-1.4, 1.4); // noise dominates — realistic, not deterministic
+      between(-1, 1);
 
-    const originalSourcingScore = Math.round(
-      Math.max(40, Math.min(98, 60 + latentQuality * 4 + between(-14, 14)))
-    );
+    const originalSourcingScore = Math.round(clamp(40, 98, 55 + sourcingDriver * 7 + between(-10, 10)));
 
-    const passedScreen = chance(0.72);
+    // What actually predicts post-hire success. Deliberately excludes
+    // eliteUniversity.
+    const trueQuality =
+      (priorLeadership ? 1.3 : 0) +
+      (startupExperience ? 1.1 : 0) +
+      Math.min(yearsExperience, 8) * 0.08 +
+      between(-1.6, 1.6);
+
+    const passedScreen = chance(clamp(0.05, 0.95, 0.55 + sourcingDriver * 0.08));
     let interviewStage: SeedCandidate["interviewStage"] = "Screen";
     let interviewOutcome: SeedCandidate["interviewOutcome"] = "FAILED";
     let hired = false;
     let rejectionReason: string | undefined;
 
     if (passedScreen) {
-      const passedOnsite = chance(0.55 + (startupExperience ? 0.08 : 0));
+      const passedOnsite = chance(clamp(0.05, 0.95, 0.45 + sourcingDriver * 0.07));
       interviewStage = "Onsite";
       if (passedOnsite) {
-        const passedFinal = chance(0.6 + latentQuality * 0.03);
+        const passedFinal = chance(clamp(0.05, 0.95, 0.5 + sourcingDriver * 0.05));
         interviewStage = "Final";
         if (passedFinal) {
           interviewOutcome = "PASSED";
-          hired = chance(0.78);
+          hired = chance(0.75);
           if (!hired) rejectionReason = pick(["Offer declined", "Budget freeze", "Chose another offer"]);
         } else {
           interviewOutcome = chance(0.15) ? "WITHDRAWN" : "FAILED";
@@ -113,14 +155,27 @@ export function generateSeedCandidates(count = 220): SeedCandidate[] {
     let retentionMonths: number | undefined;
     let managerRating: number | undefined;
     let promotionVelocityMonths: number | undefined;
+    let promotions: number | undefined;
+    let stillEmployed: boolean | undefined;
+    let department: string | undefined;
+    let roleHiredInto: string | undefined;
+    let currentRole: string | undefined;
+    let highPerformer: boolean | undefined;
 
     if (hired) {
-      const tenureBase = 8 + latentQuality * 2.2 + between(-6, 10);
-      retentionMonths = Math.round(Math.max(1, Math.min(48, tenureBase)) * 10) / 10;
-      managerRating = Math.round(Math.max(1, Math.min(5, 2.6 + latentQuality * 0.32 + between(-0.8, 0.8))) * 10) / 10;
-      if (chance(0.35 + (startupExperience ? 0.1 : 0)) && retentionMonths > 9) {
-        promotionVelocityMonths = Math.round(Math.max(6, 20 - latentQuality * 1.5 + between(-4, 4)));
+      retentionMonths = Math.round(clamp(1, 48, 9 + trueQuality * 3.2 + between(-6, 8)) * 10) / 10;
+      managerRating = Math.round(clamp(1, 5, 2.4 + trueQuality * 0.55 + between(-0.7, 0.7)) * 10) / 10;
+      highPerformer = managerRating >= 4;
+      promotions = chance(clamp(0.05, 0.7, 0.15 + Math.max(0, trueQuality) * 0.15)) ? (chance(0.75) ? 1 : 2) : 0;
+      if (promotions > 0 && retentionMonths > 9) {
+        promotionVelocityMonths = Math.round(clamp(6, 30, 20 - trueQuality * 2.5 + between(-4, 4)));
+      } else {
+        promotions = 0;
       }
+      stillEmployed = chance(clamp(0.35, 0.95, 0.55 + trueQuality * 0.1));
+      department = DEPARTMENT_BY_DOMAIN[domain] ?? "Engineering";
+      roleHiredInto = `${domain} Engineer`;
+      currentRole = stillEmployed ? (promotions > 0 ? `Senior ${domain} Engineer` : roleHiredInto) : undefined;
     }
 
     out.push({
@@ -130,6 +185,8 @@ export function generateSeedCandidates(count = 220): SeedCandidate[] {
       education,
       previousCompanies,
       startupExperience,
+      eliteUniversity,
+      priorLeadership,
       technicalDomain: domain,
       geography,
       originalSourcingScore,
@@ -140,6 +197,59 @@ export function generateSeedCandidates(count = 220): SeedCandidate[] {
       retentionMonths,
       managerRating,
       promotionVelocityMonths,
+      promotions,
+      stillEmployed,
+      department,
+      roleHiredInto,
+      currentRole,
+      highPerformer,
+    });
+  }
+  return out;
+}
+
+/**
+ * A recent, not-yet-decided batch of sourced candidates: pre-hire profile
+ * only, no interview/hire/performance data (their outcome isn't known yet —
+ * that's the point). Used to demo Model V1 vs the proposed Model V2 ranking
+ * a real incoming batch differently. Uses a different seed so it isn't a
+ * copy of the historical population, but the same generative model.
+ */
+export function generateNewBatch(count = 24): SeedCandidate[] {
+  const { pick, between, chance } = makeGenerator(7261994);
+  const out: SeedCandidate[] = [];
+  for (let i = 0; i < count; i++) {
+    const startupExperience = chance(0.35);
+    const eliteUniversity = chance(0.3);
+    const priorLeadership = chance(0.35);
+    const yearsExperience = Math.round(between(0.5, 16) * 10) / 10;
+    const domain = pick(DOMAINS);
+    const geography = pick(GEOS);
+    const education = eliteUniversity ? pick(EDUCATION_ELITE) : pick(EDUCATION_OTHER);
+    const numPrev = Math.floor(between(1, 4));
+    const previousCompanies = Array.from({ length: numPrev }, () => pick(COMPANIES));
+    const sourcingDriver =
+      (eliteUniversity ? 1.6 : 0) +
+      Math.min(yearsExperience, 10) * 0.15 +
+      (domain === "Data/ML" || domain === "Backend" ? 0.3 : 0) +
+      between(-1, 1);
+    const originalSourcingScore = Math.round(clamp(40, 98, 55 + sourcingDriver * 7 + between(-10, 10)));
+
+    out.push({
+      name: `${pick(FIRST_NAMES)} ${pick(LAST_NAMES)}`,
+      currentTitle: `${domain} Engineer`,
+      yearsExperience,
+      education,
+      previousCompanies,
+      startupExperience,
+      eliteUniversity,
+      priorLeadership,
+      technicalDomain: domain,
+      geography,
+      originalSourcingScore,
+      interviewStage: "Screen",
+      interviewOutcome: "PASSED",
+      hired: false,
     });
   }
   return out;

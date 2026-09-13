@@ -1,4 +1,6 @@
 # --- OS ---
+.review/
+.next-review/
 .DS_Store
 Thumbs.db
 ehthumbs.db

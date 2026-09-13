@@ -26,7 +26,7 @@ export interface SeedTheme {
   mentions: SeedMention[];
   alert?: {
     title: string;
-    type: "RISK" | "OPPORTUNITY";
+    type: "RISK" | "OPPORTUNITY" | "PRODUCT_SIGNAL";
     severity: "LOW" | "MEDIUM" | "HIGH";
     confidence: "LOW" | "MEDIUM" | "HIGH";
     baseline: string;
@@ -158,8 +158,8 @@ export const RADAR_THEMES: SeedTheme[] = [
       baseline: "No prior leadership-change mentions this quarter",
       trend: "New signal, 3 mentions in 2 weeks",
       aiExplanation:
-        "A newly announced enterprise-focused leadership hire is a reasonable public signal of increased enterprise investment — useful context for Company Scout's outreach framing, not a standalone causal claim.",
-      recommendedAction: "Align Company Scout outreach angles with the enterprise push while it's topical.",
+        "A newly announced enterprise-focused leadership hire is a reasonable public signal of increased enterprise investment — useful context for Growth Agent's outreach framing, not a standalone causal claim.",
+      recommendedAction: "Align Growth Agent outreach angles with the enterprise push while it's topical.",
     },
   },
   {
@@ -180,7 +180,30 @@ export const RADAR_THEMES: SeedTheme[] = [
       trend: "3 mentions across 3 weeks, escalating in tone",
       aiExplanation:
         "Public reporting plus customer-forum chatter both point to instability at a competing vendor. This is an observed pattern, not a confirmed causal driver of any specific customer's decision — treat as a prompt to reach out, not a guarantee.",
-      recommendedAction: "Brief Company Scout outreach team; prioritize prospects known to use the affected competitor.",
+      recommendedAction: "Brief Growth Agent outreach team; prioritize prospects known to use the affected competitor.",
+    },
+  },
+  {
+    key: "market-topic-voice-agents",
+    label: "Market topic trend",
+    category: "Market signal",
+    mentions: [
+      news("Industry discussion of multilingual voice agents is increasing across enterprise forums.", 3, "NEUTRAL"),
+      linkedin("More vendors positioning around multilingual voice agent support this quarter.", 2, "NEUTRAL", "EXECUTIVE"),
+      reddit("Seeing a lot more market trend chatter about voice agents lately.", 1, "NEUTRAL", "CUSTOMER"),
+      news("Analyst notes rising industry discussion of voice agent adoption in customer service.", 0, "NEUTRAL"),
+      reddit("Another thread on multilingual voice agents — feels like the market trend of the month.", 0, "NEUTRAL", "CUSTOMER"),
+    ],
+    alert: {
+      title: "Market topic trend: multilingual voice agents",
+      type: "PRODUCT_SIGNAL",
+      severity: "LOW",
+      confidence: "LOW",
+      baseline: "Sparse mentions of this topic before the last 3 weeks",
+      trend: "Discussion volume increasing across forums, social and industry press",
+      aiExplanation:
+        "Public discussion of multilingual voice agents is picking up across independent sources — a market-interest signal, not sentiment about Wonderful specifically.",
+      recommendedAction: "Consider whether this maps to a Wonderful use case; flag as context for Growth Agent outreach angles.",
     },
   },
   {

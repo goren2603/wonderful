@@ -1,288 +1,186 @@
 import { db } from "@/lib/db";
-import { pearsonCorrelation, confidenceFromStats, mean, stddev } from "@/lib/stats";
 import { getLLMProvider } from "@/lib/llm";
-import type { AgentStep, WeightReason } from "@/lib/types";
-
-interface Factor {
-  key: string;
-  label: string;
-  extract: (c: CandidateRow) => number;
-}
-
-export interface CandidateRow {
-  id: string;
-  yearsExperience: number;
-  startupExperience: boolean;
-  technicalDomain: string;
-  originalSourcingScore: number;
-  hired: boolean;
-  retentionMonths: number | null;
-  managerRating: number | null;
-}
-
-export const FACTORS: Factor[] = [
-  { key: "yearsExperience", label: "Years of experience", extract: (c) => c.yearsExperience },
-  { key: "startupExperience", label: "Startup experience", extract: (c) => (c.startupExperience ? 1 : 0) },
-  {
-    key: "highSignalDomain",
-    label: "Backend / Data-ML domain",
-    extract: (c) => (c.technicalDomain === "Backend" || c.technicalDomain === "Data/ML" ? 1 : 0),
-  },
-  { key: "originalSourcingScore", label: "Original sourcing score", extract: (c) => c.originalSourcingScore },
-];
-
-export function zScores(xs: number[]): number[] {
-  const m = mean(xs);
-  const sd = stddev(xs) || 1;
-  return xs.map((x) => (x - m) / sd);
-}
+import { REUSABLE_FACTORS, learnModel, evaluateModelVersions, scoreCandidate, HIGH_PERFORMER_DEFINITION, type CandidateRow } from "@/lib/talentModel";
+import { pearsonCorrelation, confidenceFromStats, correlationInterval } from "@/lib/stats";
+import { withAgentLease } from "@/lib/agentRuntime";
+export { REUSABLE_FACTORS, zScores, type CandidateRow } from "@/lib/talentModel";
 
 export async function runTalentAnalysis() {
-  const startedAt = new Date();
-  const steps: AgentStep[] = [];
-  const pushStep = (label: string, detail: string) =>
-    steps.push({ label, detail, at: new Date().toISOString() });
+  return withAgentLease("TALENT_INTELLIGENCE", async () => {
+    const run = await db.agentRun.create({ data: { agent: "TALENT_INTELLIGENCE", goal: "Audit Model V1 against real employee outcomes and validate a proposed Model V2" } });
+    const steps: { label: string; detail: string; at: string }[] = [];
+    const step = async (label: string, detail: string) => {
+      steps.push({ label, detail, at: new Date().toISOString() });
+      await db.agentRun.update({ where: { id: run.id }, data: { stepsJson: JSON.stringify(steps) } });
+    };
+    try {
+      const raw = await db.candidate.findMany({ include: { hire: true, performance: true }, orderBy: { id: "asc" } });
+      const toRow = (c: (typeof raw)[number]): CandidateRow => ({
+        ...c,
+        hired: c.hire?.hired ?? false,
+        retentionMonths: c.performance?.retentionMonths ?? null,
+        managerRating: c.performance?.managerRating ?? null,
+        highPerformer: c.performance?.highPerformer ?? null,
+      });
+      const historical = raw.filter((c) => !c.isNewBatch).map(toRow);
+      const batch = raw.filter((c) => c.isNewBatch).map(toRow);
 
-  const run = await db.agentRun.create({
-    data: { agent: "TALENT_INTELLIGENCE", goal: "Analyze sourced-candidate outcomes for sourcing signal", status: "RUNNING" },
+      await step("Ingesting outcomes", `${historical.length} historical candidates connected to downstream outcomes (interviewed, hired, tenure, performance). ${batch.length} recent not-yet-decided candidates held out as a demo batch.`);
+
+      // Exploratory correlation list — supporting detail, not the headline.
+      const model = learnModel(historical);
+      const warnings = ["Correlational, not causal. Retention is not adjusted for tenure opportunity. Geography is excluded from the model."];
+
+      // Headline: does a proposed Model V2 actually beat Model V1 on data
+      // neither model was fit to?
+      await step("Auditing Model V1", `Comparing what Model V1's score rewards against what real post-hire outcomes show. High performer = ${HIGH_PERFORMER_DEFINITION}.`);
+      const evaluation = evaluateModelVersions(historical);
+      if (!evaluation.eligible) warnings.push("Fewer than 20 hired candidates with a recorded manager rating and a balanced holdout split: validation skipped, no Model V2 proposed this run.");
+      await step(
+        "Validating Model V2",
+        evaluation.eligible
+          ? `Trained on ${evaluation.trainSize} candidates, validated on ${evaluation.holdoutSize} held-out candidates Model V2 never saw. Model V1 precision ${(evaluation.v1Precision * 100).toFixed(0)}%, Model V2 precision ${(evaluation.v2Precision * 100).toFixed(0)}% at top ${evaluation.kUsed}. Status: ${evaluation.validationStatus}.`
+          : "Insufficient outcome data for a holdout-validated comparison."
+      );
+
+      const narrative = [
+        evaluation.eligible
+          ? `Model V1 identifies real high performers with ${(evaluation.v1Precision * 100).toFixed(0)}% precision on held-out data. The proposed Model V2 reaches ${(evaluation.v2Precision * 100).toFixed(0)}%, and ${evaluation.validationStatus === "PASSED" ? "outperforms V1, so it is recommended for approval." : "does not outperform V1, so no change is recommended this run."}`
+          : "Not enough hired candidates with recorded outcomes yet to validate a proposed model.",
+        ...evaluation.factorAudit.slice(0, 3).map((f) => `${f.label}: Model V1 weight ${(f.v1Weight * 100).toFixed(0)}%, recommended ${(f.v2Weight * 100).toFixed(0)}%. ${f.reason}`),
+      ].join("\n");
+      let llm = { text: narrative, provider: "demo" as "demo" | "live", model: "computed-summary" };
+      try {
+        llm = await getLLMProvider().complete({ system: "Summarize the supplied holdout-validated model comparison. Never claim causation or invent numbers not given.", prompt: narrative, maxTokens: 300 });
+      } catch {
+        warnings.push("Narrative provider failed; computed analysis retained.");
+      }
+
+      const summary = evaluation.eligible
+        ? `Reviewed ${historical.length} candidates (${evaluation.hiresAnalyzed} eventual hires). Model V2 ${evaluation.validationStatus === "PASSED" ? "validated and proposed for approval" : "did not outperform Model V1 — no change proposed"}.`
+        : `Reviewed ${historical.length} candidates; insufficient outcome data to validate a proposed model yet.`;
+
+      await step("Persisting results", "Recording the evaluation, factor audit and any batch re-ranking.");
+      await db.$transaction(
+        async (tx) => {
+          for (const f of model.factors) {
+            const ci = correlationInterval(f.r, f.n);
+            await tx.sourcingInsight.create({
+              data: {
+                kind: "CORRELATION",
+                factor: f.key,
+                title: `${f.label} vs. post-hire success`,
+                description: `${f.label}: Pearson r=${f.r.toFixed(2)} (n=${f.n}); approximate 95% Fisher interval ${ci ? `[${ci[0].toFixed(2)}, ${ci[1].toFixed(2)}]` : "unavailable"}. Success combines standardized retention and manager rating. Association only.`,
+                sampleSize: f.n,
+                confidence: f.confidence,
+                correlation: f.r,
+                runId: run.id,
+                confoundersJson: JSON.stringify(["Selection bias: hired candidates only", "Role, manager and tenure opportunity not controlled", "Exploratory multiple comparisons", ...(!f.balanced ? ["Fewer than five observations in one factor group"] : [])]),
+              },
+            });
+          }
+          const known = raw.filter((c) => !c.isNewBatch && c.hire !== null);
+          const rHired = pearsonCorrelation(known.map((c) => c.originalSourcingScore), known.map((c) => Number(c.hire!.hired)));
+          await tx.sourcingInsight.create({
+            data: {
+              kind: "CORRELATION",
+              factor: "originalSourcingScore_vs_hired",
+              title: "Original sourcing score vs. recorded hire decision",
+              description: `${known.length} recorded hiring decisions. r=${rHired.toFixed(2)}.`,
+              sampleSize: known.length,
+              confidence: confidenceFromStats(known.length, rHired),
+              correlation: rHired,
+              runId: run.id,
+            },
+          });
+
+          await tx.sourcingModelEvaluation.create({
+            data: {
+              runId: run.id,
+              candidatesReviewed: evaluation.candidatesReviewed,
+              hiresAnalyzed: evaluation.hiresAnalyzed,
+              trainSize: evaluation.trainSize,
+              holdoutSize: evaluation.holdoutSize,
+              kUsed: evaluation.kUsed,
+              v1Precision: evaluation.v1Precision,
+              v2Precision: evaluation.v2Precision,
+              improvementPct: evaluation.improvementPct,
+              validationStatus: evaluation.eligible ? evaluation.validationStatus : "INSUFFICIENT_DATA",
+              highPerformerDefinition: HIGH_PERFORMER_DEFINITION,
+              factorAuditJson: JSON.stringify(evaluation.factorAudit),
+            },
+          });
+
+          if (evaluation.eligible && evaluation.validationStatus === "PASSED") {
+            await tx.sourcingWeightProposal.updateMany({ where: { status: "PENDING" }, data: { status: "SUPERSEDED", decidedAt: new Date() } });
+            await tx.approvalItem.updateMany({ where: { kind: "SOURCING_WEIGHT_CHANGE", status: "PENDING" }, data: { status: "SUPERSEDED", decidedAt: new Date() } });
+            const payload = { runId: run.id, weights: evaluation.v2Weights, featureStats: evaluation.v2FeatureStats, sampleSize: evaluation.trainSize };
+            const proposal = await tx.sourcingWeightProposal.create({
+              data: {
+                factor: "Model V2 (validated)",
+                oldWeight: 0,
+                newWeight: 1,
+                rationale: `Validated on ${evaluation.holdoutSize} held-out candidates: ${(evaluation.v1Precision * 100).toFixed(0)}% → ${(evaluation.v2Precision * 100).toFixed(0)}% high-performer precision (+${evaluation.improvementPct?.toFixed(1) ?? "?"}%). ` + Object.entries(evaluation.v2Weights).map(([k, v]) => `${k}: ${v >= 0 ? "+" : ""}${(v * 100).toFixed(0)}%`).join(", "),
+                status: "PENDING",
+              },
+            });
+            await tx.approvalItem.create({ data: { kind: "SOURCING_WEIGHT_CHANGE", entityType: "SourcingWeightProposal", entityId: proposal.id, title: "Promote Model V2 to active", payloadJson: JSON.stringify(payload) } });
+            await tx.auditLogEntry.create({ data: { actor: "agent", action: "model_v2_proposed", entityType: "AgentRun", entityId: run.id, detailJson: JSON.stringify(payload) } });
+          }
+
+          // Re-rank the new, not-yet-decided batch with the validated V2
+          // weights (train-fold only — exactly what was validated). Prior
+          // versions are kept (never deleted) so each candidate's ranking
+          // history stays inspectable across analysis runs; the summary API
+          // shows only the latest run's snapshot.
+          if (evaluation.eligible && batch.length > 0) {
+            const byV1 = [...batch].sort((a, b) => b.originalSourcingScore - a.originalSourcingScore || a.id.localeCompare(b.id));
+            const byV2 = [...batch].map((c) => ({ c, score: scoreCandidate(c, evaluation.v2Weights, evaluation.v2FeatureStats) })).sort((a, b) => b.score - a.score || a.c.id.localeCompare(b.c.id));
+            for (const [i, { c, score }] of byV2.entries()) {
+              const reasons = REUSABLE_FACTORS.map((f) => {
+                const s = evaluation.v2FeatureStats.find((s) => s.key === f.key)!;
+                const z = (f.extract(c) - s.mean) / s.std;
+                return { factor: f.label, contribution: (evaluation.v2Weights[f.key] ?? 0) * z, detail: `${f.label}: V2 weight ${((evaluation.v2Weights[f.key] ?? 0) * 100).toFixed(0)}%, this candidate's standardized value ${z.toFixed(2)}` };
+              }).sort((a, b) => Math.abs(b.contribution) - Math.abs(a.contribution));
+              await tx.learnedRanking.create({
+                data: {
+                  candidateId: c.id,
+                  oldRank: byV1.findIndex((o) => o.id === c.id) + 1,
+                  newRank: i + 1,
+                  oldScore: c.originalSourcingScore,
+                  newScore: Math.round(score * 100) / 100,
+                  reasonJson: JSON.stringify(reasons),
+                  generatedAt: run.startedAt,
+                },
+              });
+            }
+          }
+
+          await tx.agentRun.update({
+            where: { id: run.id },
+            data: {
+              status: "SUCCEEDED",
+              endedAt: new Date(),
+              durationMs: Date.now() - run.startedAt.getTime(),
+              sourcesChecked: historical.length,
+              entitiesFound: historical.length,
+              entitiesAccepted: evaluation.hiresAnalyzed,
+              actionsCreated: (evaluation.validationStatus === "PASSED" ? 1 : 0) + batch.length,
+              summary,
+              llmSummary: llm.text,
+              llmProvider: llm.provider,
+              llmModel: llm.model,
+              warningsJson: JSON.stringify(warnings),
+              stepsJson: JSON.stringify(steps),
+            },
+          });
+        },
+        { timeout: 30000 }
+      );
+      return { runId: run.id, validationStatus: evaluation.validationStatus };
+    } catch (err) {
+      await db.agentRun.update({ where: { id: run.id }, data: { status: "FAILED", endedAt: new Date(), durationMs: Date.now() - run.startedAt.getTime(), errorMessage: err instanceof Error ? err.message : String(err) } });
+      throw err;
+    }
   });
-
-  try {
-    pushStep("Loading history", "Pulling candidate, interview, hire, and performance records.");
-    const rawCandidates = await db.candidate.findMany({
-      include: { hire: true, performance: true },
-    });
-
-    const rows: CandidateRow[] = rawCandidates.map((c) => ({
-      id: c.id,
-      yearsExperience: c.yearsExperience,
-      startupExperience: c.startupExperience,
-      technicalDomain: c.technicalDomain,
-      originalSourcingScore: c.originalSourcingScore,
-      hired: c.hire?.hired ?? false,
-      retentionMonths: c.performance?.retentionMonths ?? null,
-      managerRating: c.performance?.managerRating ?? null,
-    }));
-
-    const hiredRows = rows.filter((r) => r.hired && r.retentionMonths != null && r.managerRating != null);
-
-    pushStep(
-      "Statistical analysis",
-      `Computing correlations across ${FACTORS.length} factors against retention and manager rating (n=${hiredRows.length} hired candidates with outcome data).`
-    );
-
-    await db.sourcingInsight.deleteMany({});
-    await db.learnedRanking.deleteMany({});
-    await db.sourcingWeightProposal.deleteMany({ where: { status: "PENDING" } });
-
-    const retentionZ = zScores(hiredRows.map((r) => r.retentionMonths as number));
-    const ratingZ = zScores(hiredRows.map((r) => r.managerRating as number));
-    const successComposite = retentionZ.map((z, i) => (z + ratingZ[i]) / 2);
-
-    const factorCorrelations: { factor: Factor; r: number; n: number }[] = [];
-
-    for (const factor of FACTORS) {
-      const x = hiredRows.map((r) => factor.extract(r));
-      const r = pearsonCorrelation(x, successComposite);
-      const n = hiredRows.length;
-      factorCorrelations.push({ factor, r, n });
-
-      const confidence = confidenceFromStats(n, r);
-      const direction = r > 0 ? "positively" : "negatively";
-      await db.sourcingInsight.create({
-        data: {
-          kind: "CORRELATION",
-          factor: factor.key,
-          title: `${factor.label} correlates ${direction} with post-hire success`,
-          description: `Among ${n} hired candidates with recorded outcomes, ${factor.label.toLowerCase()} shows a Pearson correlation of r=${r.toFixed(
-            2
-          )} with a composite of retention and manager rating. This is an observed correlation, not a causal claim — other unmeasured factors (team, manager, role) likely contribute.`,
-          sampleSize: n,
-          confidence,
-          correlation: r,
-          confoundersJson: JSON.stringify([
-            "Manager and team assignment not controlled for",
-            "Role/level differences across candidates",
-            n < 50 ? "Small sample size limits reliability" : "Sample size is moderate; treat as directional",
-          ]),
-          runId: run.id,
-        },
-      });
-    }
-
-    // Original sourcing score's own predictive power, as a baseline comparison.
-    const sourcingVsHired = pearsonCorrelation(
-      rows.map((r) => r.originalSourcingScore),
-      rows.map((r) => (r.hired ? 1 : 0))
-    );
-    await db.sourcingInsight.create({
-      data: {
-        kind: "CORRELATION",
-        factor: "originalSourcingScore_vs_hired",
-        title: "Original sourcing score vs. actual hire outcome",
-        description: `Across all ${rows.length} sourced candidates, the original AI sourcing score correlates with r=${sourcingVsHired.toFixed(
-          2
-        )} with whether the candidate was ultimately hired. This measures how well the current sourcing score predicts downstream hiring, independent of performance after hire.`,
-        sampleSize: rows.length,
-        confidence: confidenceFromStats(rows.length, sourcingVsHired),
-        correlation: sourcingVsHired,
-        confoundersJson: JSON.stringify(["Interview process quality not isolated from sourcing quality"]),
-        runId: run.id,
-      },
-    });
-
-    pushStep("Feature importance", "Ranking factors by absolute correlation strength to derive learned weights.");
-
-    // Learned weights: normalize absolute correlation among the reusable
-    // pre-hire factors (exclude the raw sourcing score itself from being its
-    // own replacement weight) into a weight vector summing to 1.
-    const weighable = factorCorrelations.filter((f) => f.factor.key !== "originalSourcingScore");
-    const totalAbsR = weighable.reduce((a, f) => a + Math.abs(f.r), 0) || 1;
-    const learnedWeights = weighable.map((f) => ({
-      factor: f.factor,
-      weight: Math.abs(f.r) / totalAbsR,
-      r: f.r,
-      n: f.n,
-    }));
-
-    const oldWeight = 1 / weighable.length;
-    for (const w of learnedWeights) {
-      const changedEnough = Math.abs(w.weight - oldWeight) > 0.03;
-      if (!changedEnough) continue;
-      await db.sourcingWeightProposal.create({
-        data: {
-          factor: w.factor.key,
-          oldWeight: Math.round(oldWeight * 100) / 100,
-          newWeight: Math.round(w.weight * 100) / 100,
-          rationale: `${w.factor.label} shows r=${w.r.toFixed(2)} with post-hire success (n=${w.n}), ${
-            w.weight > oldWeight ? "stronger" : "weaker"
-          } than an equal-weight baseline suggests. Proposing to ${
-            w.weight > oldWeight ? "increase" : "decrease"
-          } its weight in the sourcing score accordingly.`,
-          status: "PENDING",
-        },
-      });
-
-      await db.sourcingInsight.create({
-        data: {
-          kind: "RECOMMENDATION",
-          factor: w.factor.key,
-          title: `Consider ${w.weight > oldWeight ? "increasing" : "decreasing"} weight on ${w.factor.label.toLowerCase()}`,
-          description: `Based on observed correlation with post-hire success (r=${w.r.toFixed(2)}, n=${w.n}), an equal-weight baseline may be ${
-            w.weight > oldWeight ? "under" : "over"
-          }-weighting this factor. This is a recommendation pending human approval, not an automatic change.`,
-          sampleSize: w.n,
-          confidence: confidenceFromStats(w.n, w.r),
-          correlation: w.r,
-          confoundersJson: JSON.stringify(["Recommendation derived from correlational data; requires human review before applying"]),
-          runId: run.id,
-        },
-      });
-    }
-
-    pushStep("Re-ranking", "Applying learned weights to produce a proposed candidate ranking.");
-
-    // Build a learned score for every candidate using only pre-hire-available
-    // features, weighted by the learned weights above.
-    const allFeatureMatrix = learnedWeights.map((w) => rows.map((r) => w.factor.extract(r)));
-    const allFeatureZ = allFeatureMatrix.map((col) => zScores(col));
-
-    const learnedScoresRaw = rows.map((_, i) =>
-      learnedWeights.reduce((sum, w, fi) => sum + w.weight * allFeatureZ[fi][i] * Math.sign(w.r || 1), 0)
-    );
-    const minRaw = Math.min(...learnedScoresRaw);
-    const maxRaw = Math.max(...learnedScoresRaw);
-    const learnedScores100 = learnedScoresRaw.map((s) =>
-      Math.round((((s - minRaw) / (maxRaw - minRaw || 1)) * 60 + 40) * 10) / 10
-    );
-
-    const byOldScoreDesc = [...rows]
-      .map((r, i) => ({ r, i }))
-      .sort((a, b) => b.r.originalSourcingScore - a.r.originalSourcingScore);
-    const oldRankOf = new Map<string, number>();
-    byOldScoreDesc.forEach(({ r }, idx) => oldRankOf.set(r.id, idx + 1));
-
-    const byNewScoreDesc = [...rows]
-      .map((r, i) => ({ r, i, score: learnedScores100[i] }))
-      .sort((a, b) => b.score - a.score);
-
-    let actionsCreated = 0;
-    for (let rank = 0; rank < byNewScoreDesc.length; rank++) {
-      const { r, i, score } = byNewScoreDesc[rank];
-      const reasons: WeightReason[] = learnedWeights
-        .map((w, fi) => ({
-          factor: w.factor.label,
-          contribution: Math.round(w.weight * allFeatureZ[fi][i] * Math.sign(w.r || 1) * 100) / 100,
-          detail: `${w.factor.label}: weight ${(w.weight * 100).toFixed(0)}%, this candidate's standardized value ${allFeatureZ[fi][i].toFixed(2)}`,
-        }))
-        .sort((a, b) => Math.abs(b.contribution) - Math.abs(a.contribution));
-
-      await db.learnedRanking.create({
-        data: {
-          candidateId: r.id,
-          oldRank: oldRankOf.get(r.id) ?? 0,
-          newRank: rank + 1,
-          oldScore: r.originalSourcingScore,
-          newScore: score,
-          reasonJson: JSON.stringify(reasons),
-          generatedAt: new Date(),
-        },
-      });
-      actionsCreated++;
-    }
-
-    pushStep("LLM interpretation", "Composing a narrative interpretation of the strongest findings.");
-    const topFindings = factorCorrelations
-      .slice()
-      .sort((a, b) => Math.abs(b.r) - Math.abs(a.r))
-      .slice(0, 3);
-    const narrativePrompt = [
-      `Sourcing analysis over ${rows.length} candidates (${hiredRows.length} hired with full outcome data):`,
-      ...topFindings.map(
-        (f) =>
-          `- ${f.factor.label}: r=${f.r.toFixed(2)} with post-hire success (n=${f.n}, ${confidenceFromStats(f.n, f.r).toLowerCase()} confidence).`
-      ),
-      learnedWeights.length > 0
-        ? `Proposed weight changes affect ${learnedWeights.filter((w) => Math.abs(w.weight - oldWeight) > 0.03).length} factor(s), pending human approval.`
-        : "No material weight changes proposed this run.",
-      "These are observed correlations only, not causal claims — confounders like manager, team, and role are not controlled for.",
-    ].join("\n");
-    const llmResult = await getLLMProvider().complete({
-      system: "You interpret recruiting analytics for a talent operations team. Be precise about sample sizes and confidence, never claim causation.",
-      prompt: narrativePrompt,
-      maxTokens: 300,
-    });
-
-    const durationMs = Date.now() - startedAt.getTime();
-    await db.agentRun.update({
-      where: { id: run.id },
-      data: {
-        status: "SUCCEEDED",
-        endedAt: new Date(),
-        durationMs,
-        sourcesChecked: rows.length,
-        entitiesFound: rows.length,
-        entitiesAccepted: rows.length,
-        actionsCreated,
-        stepsJson: JSON.stringify(steps),
-        summary: `Analyzed ${rows.length} candidates (${hiredRows.length} with full outcome data), produced ${factorCorrelations.length + 1} correlation findings and a re-ranking for ${actionsCreated} candidates.`,
-        llmSummary: llmResult.text,
-        llmProvider: llmResult.provider,
-        llmModel: llmResult.model,
-      },
-    });
-
-    return { runId: run.id };
-  } catch (err) {
-    await db.agentRun.update({
-      where: { id: run.id },
-      data: {
-        status: "FAILED",
-        endedAt: new Date(),
-        errorMessage: err instanceof Error ? err.message : String(err),
-        stepsJson: JSON.stringify(steps),
-      },
-    });
-    throw err;
-  }
 }

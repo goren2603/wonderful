@@ -1,0 +1,76 @@
+import assert from 'node:assert/strict';
+import {db} from '../src/lib/db';
+import {runTalentAnalysis} from '../src/lib/agents/talentAgent';
+import {runCompanyScoutScan} from '../src/lib/agents/scoutAgent';
+import {runRadarScan,seedRadarData} from '../src/lib/agents/radarAgent';
+import {COUNTRIES,VERTICALS} from '../src/lib/seedData/prospects';
+import {withAgentLease,retry} from '../src/lib/agentRuntime';
+import {schedulerTick} from '../src/lib/scheduler';
+import {POST as decide} from '../src/app/api/approvals/[id]/decide/route';
+import {PATCH as outreach} from '../src/app/api/scout/outreach/[id]/route';
+import {GET as overview} from '../src/app/api/radar/overview/route';
+import {GET as model} from '../src/app/api/talent/model/route';
+import {POST as csvImport} from '../src/app/api/talent/csv/route';
+
+if(!process.env.DATABASE_URL?.includes('review-test')) throw new Error('Use a disposable review-test database copy; never the public demo database');
+process.env.ANTHROPIC_API_KEY='';process.env.DISABLE_SCHEDULER='1';
+const req=(body:unknown)=>new Request('http://localhost/api',{method:'POST',headers:{'content-type':'application/json'},body:JSON.stringify(body)});
+const check=(label:string)=>console.log(`PASS ${label}`);
+async function main(){
+  await db.scheduledJob.updateMany({data:{lastStatus:'SUCCEEDED'}});
+  const oldRanks=await db.learnedRanking.count();
+  const batchCount=await db.candidate.count({where:{isNewBatch:true}});
+  await runTalentAnalysis();await runTalentAnalysis();
+  // Only the recent not-yet-decided batch gets ranked each run (historical
+  // candidates are supporting evidence, not re-ranked); prior versions are
+  // kept, so two runs add two full batch-sized snapshots.
+  assert.equal(await db.learnedRanking.count(),oldRanks+2*batchCount);
+  const approval=await db.approvalItem.findFirstOrThrow({where:{kind:'SOURCING_WEIGHT_CHANGE',status:'PENDING'}});
+  assert.equal((await decide(req({decision:'APPROVED'}),{params:{id:approval.id}})).status,200);
+  assert.equal((await decide(req({decision:'REJECTED'}),{params:{id:approval.id}})).status,409);
+  const active=(await (await model()).json()).activeModel;
+  assert.ok(active.weights);await runTalentAnalysis();
+  assert.equal((await (await model()).json()).activeModel.id,active.id);
+  check('Talent history retained; whole model activation persists across new proposals; replay rejected');
+  const before=await db.prospect.count();
+  await runCompanyScoutScan({countries:COUNTRIES,verticals:VERTICALS,limit:50});
+  const after=await db.prospect.count();assert.ok(after>=before);
+  await runCompanyScoutScan({countries:COUNTRIES,verticals:VERTICALS,limit:50});
+  assert.equal(await db.prospect.count(),after);
+  const p=await db.prospect.findFirstOrThrow({include:{scoreHistory:{orderBy:{recordedAt:'desc'}}}});
+  assert.ok(p.scoreHistory.length>=2);assert.equal(p.scoreHistory[0].score,p.scoreHistory[1].score);
+  assert.ok(JSON.parse(p.scoreHistory[0].breakdownJson).some((b:{evidenceIds:string[]})=>b.evidenceIds.length));
+  check('Scout discovers entire filtered universe, deduplicates and deterministically refreshes score history');
+  const email=await db.outreachMessage.findFirstOrThrow({where:{channel:'EMAIL',status:'AWAITING_APPROVAL'}});
+  assert.equal((await outreach(req({status:'APPROVED'}),{params:{id:email.id}})).status,409);
+  const gate=await db.approvalItem.findFirstOrThrow({where:{entityId:email.id,status:'PENDING'}});
+  assert.equal((await decide(req({decision:'APPROVED'}),{params:{id:gate.id}})).status,200);
+  assert.equal((await outreach(req({status:'SENT'}),{params:{id:email.id}})).status,409);
+  assert.equal((await outreach(req({status:'SENT',manualConfirmed:true}),{params:{id:email.id}})).status,200);
+  assert.equal((await outreach(req({status:'REPLIED'}),{params:{id:email.id}})).status,200);
+  assert.equal((await db.prospect.findUniqueOrThrow({where:{id:email.prospectId}})).status,'REPLIED');
+  check('Outreach gate cannot be bypassed; confirmed external send and reply update prospect and audit');
+  await runRadarScan('Wonderful');
+  const all=await (await overview(new Request('http://localhost/api?company=Wonderful'))).json();
+  const lens=await (await overview(new Request('http://localhost/api?company=Wonderful&lens=CANDIDATE'))).json();
+  assert.ok(all.alerts.length);assert.ok(lens.themes.length<all.themes.length);assert.ok(lens.alerts.length<all.alerts.length);
+  const count=await db.mention.count();await runRadarScan('Wonderful');assert.equal(await db.mention.count(),count);
+  await seedRadarData('Review fixture');const fixtureCount=await db.mention.count();await seedRadarData('Review fixture');assert.equal(await db.mention.count(),fixtureCount);
+  await runRadarScan();
+  check('Radar recomputes evidence thresholds and audience lenses; scans invent no mentions; fixtures deduplicate');
+  await assert.rejects(()=>withAgentLease('COMPANY_SCOUT',()=>withAgentLease('COMPANY_SCOUT',async()=>true)),/already running/);
+  let attempts=0;assert.equal(await retry(async()=>{if(++attempts<3)throw new Error('transient');return true;},3,1),true);assert.equal(attempts,3);
+  await db.scheduledJob.updateMany({data:{enabled:false}});
+  await db.scheduledJob.update({where:{agentKey:'EXTERNAL_RADAR'},data:{enabled:true,nextRunAt:new Date(Date.now()-1000),lastStatus:'SUCCEEDED'}});
+  const runs=await db.agentRun.count();await schedulerTick();assert.ok(await db.agentRun.count()>runs);
+  assert.ok((await db.scheduledJob.findUniqueOrThrow({where:{agentKey:'EXTERNAL_RADAR'}})).nextRunAt!>new Date());
+  check('Concurrent execution rejected; bounded retries work; persisted due job runs without a browser');
+  const importFile=async(text:string)=>{const form=new FormData();form.append('file',new File([text],'test.csv'));return csvImport(new Request('http://localhost/api',{method:'POST',body:form}));};
+  const bad='name,originalSourcingScore,hired,managerRating\nInvalid,80,true,99';
+  const c=await db.candidate.count();const invalid=await (await importFile(bad)).json();assert.equal(invalid.created,0);assert.equal(await db.candidate.count(),c);
+  const good='name,originalSourcingScore,hired,retentionMonths,managerRating\nReview import,80,true,12,4';
+  assert.equal((await (await importFile(good)).json()).created,1);assert.equal((await (await importFile(good)).json()).alreadyImported,true);
+  check('CSV validates before insertion, imports atomically per row and deduplicates retries');
+  console.log('Integration suite passed');
+}
+main().catch(err=>{console.error(err);process.exitCode=1;}).finally(()=>db.$disconnect());

@@ -66,7 +66,7 @@ export function Button({
   accent = "ink",
 }: {
   children: ReactNode;
-  onClick?: () => void;
+  onClick?: () => void | Promise<void>;
   variant?: "primary" | "secondary" | "ghost" | "danger";
   size?: "sm" | "md";
   disabled?: boolean;
@@ -86,7 +86,7 @@ export function Button({
   return (
     <button
       type={type}
-      onClick={onClick}
+      onClick={() => { if(onClick) Promise.resolve(onClick()).catch(()=>{}); }}
       disabled={disabled}
       style={variant === "primary" ? { backgroundColor: accentColor } : undefined}
       className={clsx(base, sizes, variants[variant], className)}

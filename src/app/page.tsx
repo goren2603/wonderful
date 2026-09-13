@@ -1,4 +1,5 @@
 "use client";
+import { request as fetch } from "@/lib/client";
 
 import { useEffect, useState } from "react";
 import Link from "next/link";
@@ -14,28 +15,28 @@ const PRODUCTS = [
   {
     key: "TALENT_INTELLIGENCE" as const,
     href: "/talent",
-    name: "Talent Intelligence",
-    tagline: "Learns which sourced candidates actually become great hires — and rewrites sourcing accordingly.",
+    name: "Sourcing Optimizer",
+    tagline: "Audits Wonderful's sourcing model against real employee outcomes and validates a better one before recommending it.",
     accent: "#6d5efc",
     bg: "bg-talent-soft",
     text: "text-talent",
-    loop: "SOURCE → INTERVIEW → HIRE → PERFORMANCE → LEARN → IMPROVE SOURCING",
+    loop: "MODEL V1 → OUTCOMES → AUDIT → MODEL V2 → VALIDATION → MONITORING",
   },
   {
     key: "COMPANY_SCOUT" as const,
     href: "/scout",
-    name: "Company Scout",
-    tagline: "An autonomous prospecting employee: finds, scores, and preps outreach for enterprise targets across Europe.",
+    name: "Growth Agent",
+    tagline: "An autonomous outbound BD agent: finds real companies and people, researches them, and prepares personalized outreach for your approval.",
     accent: "#0f9d76",
     bg: "bg-scout-soft",
     text: "text-scout",
-    loop: "DISCOVER → RESEARCH → SCORE → OUTREACH → APPROVE",
+    loop: "FIND COMPANY → FIND PERSON → RESEARCH → CONTACT → TRACK → LEARN",
   },
   {
     key: "EXTERNAL_RADAR" as const,
     href: "/radar",
     name: "External Radar",
-    tagline: "Watches public signal 24/7 and turns scattered mentions into explained, confidence-scored alerts.",
+    tagline: "Reanalyzes monitored evidence on a schedule and turns scattered mentions into explained, confidence-scored alerts.",
     accent: "#e8622c",
     bg: "bg-radar-soft",
     text: "text-radar",
@@ -90,8 +91,7 @@ export default function LauncherPage() {
         <p className="mb-2 text-xs font-semibold uppercase tracking-widest text-black/40">Wonderful</p>
         <h1 className="text-4xl font-semibold tracking-tight text-black/90">Wonderful Intelligence</h1>
         <p className="mt-3 max-w-2xl text-base text-black/55">
-          Three autonomous intelligence products, one shared digital workforce. Each one researches, scores, and
-          drafts on its own — you mostly review and approve.
+          Three autonomous intelligence products, one shared digital workforce. Scheduled analysis, evidence-linked decisions, and approval-gated drafts. Start with a product below.
         </p>
       </header>
 
@@ -107,7 +107,7 @@ export default function LauncherPage() {
                     <span className={`text-sm font-semibold ${p.text}`}>{p.name}</span>
                     <span className="flex items-center gap-1.5 text-[11px] font-medium text-black/50">
                       <LiveDot active={Boolean(status?.job?.enabled)} />
-                      {isWorking ? "Working" : status?.job?.enabled ? "Monitoring" : "Idle"}
+                      {isWorking ? "Working" : status?.job?.enabled ? "Scheduled" : "Idle"}
                     </span>
                   </div>
                 </div>
@@ -163,7 +163,7 @@ export default function LauncherPage() {
                   <div>
                     <p className="text-sm font-medium text-black/85">{p.name}</p>
                     <p className="text-xs text-black/45">
-                      {isWorking ? "Working now" : status?.job?.enabled ? "Monitoring on schedule" : "Scheduled"}
+                      {isWorking ? "Working now" : status?.job?.enabled ? "Scheduled analysis" : "Scheduled"}
                     </p>
                   </div>
                 </div>

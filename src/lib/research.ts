@@ -21,9 +21,13 @@ export interface EvidenceItem {
   isDemo: boolean;
 }
 
+import { SEED_COMPANIES, SIGNAL_LIBRARY, type Country, type Vertical, type SeedCompany } from "./seedData/prospects";
+
 export interface ResearchProvider {
   name: "demo" | "live";
   isConfigured(): boolean;
+  discover(countries: Country[], verticals: Vertical[]): Promise<SeedCompany[]>;
+  research(company: SeedCompany): Promise<EvidenceItem[]>;
 }
 
 class DemoResearchProvider implements ResearchProvider {
@@ -31,24 +35,19 @@ class DemoResearchProvider implements ResearchProvider {
   isConfigured(): boolean {
     return true;
   }
-}
-
-class LiveSearchProvider implements ResearchProvider {
-  name = "live" as const;
-  private apiKey?: string;
-  constructor() {
-    this.apiKey = process.env.SEARCH_PROVIDER_API_KEY;
+  async discover(countries: Country[], verticals: Vertical[]) {
+    return SEED_COMPANIES.filter(c=>countries.includes(c.country)&&verticals.includes(c.vertical));
   }
-  isConfigured(): boolean {
-    return Boolean(this.apiKey);
+  async research(company: SeedCompany): Promise<EvidenceItem[]> {
+    return SIGNAL_LIBRARY[company.vertical].map((snippet,i)=>({sourceUrl:company.website,sourceName:`${company.name} — sample scenario`,sourceDate:new Date("2026-09-13T00:00:00Z"),title:`Illustrative sector signal ${i+1}`,snippet,confidence:0,isDemo:true}));
   }
-  // Intentionally unimplemented until a real search API key is configured.
-  // Wire this up to your provider of choice (Serper/Bing/NewsAPI) — the rest
-  // of the app only depends on EvidenceItem[], so nothing else changes.
 }
 
 export function getResearchProvider(): ResearchProvider {
-  const live = new LiveSearchProvider();
-  if (live.isConfigured()) return live;
   return new DemoResearchProvider();
+}
+
+// Capability status is about implemented behavior, never merely the presence of a key.
+export function researchStatus() {
+  return { provider: "demo", liveAvailable: false, warning: "Curated sample research only. A search API adapter and source verification are not implemented; setting a key alone does not enable live research." };
 }

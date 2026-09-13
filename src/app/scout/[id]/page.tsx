@@ -1,4 +1,5 @@
 "use client";
+import { request as fetch } from "@/lib/client";
 
 import { useEffect, useState } from "react";
 import { useParams } from "next/navigation";
@@ -21,15 +22,22 @@ interface DecisionMaker {
   name: string;
   title: string;
   linkedinUrl: string | null;
+  email: string | null;
   confidence: number;
+  whyThisPerson: string | null;
+  isReal: boolean;
 }
 interface OutreachMessage {
   id: string;
+  decisionMakerId: string | null;
   channel: "EMAIL" | "LINKEDIN";
   subject: string | null;
   body: string;
   angle: string;
   status: string;
+  sentAt: string | null;
+  replyNote: string | null;
+  nextAction: string | null;
 }
 interface Prospect {
   id: string;
@@ -51,20 +59,22 @@ interface Prospect {
 
 function OutreachCard({ message, onChanged }: { message: OutreachMessage; onChanged: () => void }) {
   const [copied, setCopied] = useState(false);
+  const [manualConfirmed,setManualConfirmed]=useState(false);
+  const [replyNote,setReplyNote]=useState("");
+  const [nextAction,setNextAction]=useState("");
 
-  const setStatus = async (status: string) => {
+  const setStatus = async (status: string, extra?: Record<string, unknown>) => {
     await fetch(`/api/scout/outreach/${message.id}`, {
       method: "PATCH",
       headers: { "content-type": "application/json" },
-      body: JSON.stringify({ status }),
+      body: JSON.stringify({ status, manualConfirmed, ...extra }),
     });
     onChanged();
   };
 
-  const copy = () => {
-    navigator.clipboard?.writeText(message.body).catch(() => {});
-    setCopied(true);
-    setTimeout(() => setCopied(false), 1500);
+  const copy = async () => {
+    try { await navigator.clipboard.writeText(message.body); setCopied(true); setTimeout(()=>setCopied(false),1500); }
+    catch { window.dispatchEvent(new CustomEvent('app-error',{detail:'Clipboard unavailable. Select and copy the draft text manually.'})); }
   };
 
   const decide = async (decision: "APPROVED" | "REJECTED") => {
@@ -77,10 +87,7 @@ function OutreachCard({ message, onChanged }: { message: OutreachMessage; onChan
         body: JSON.stringify({ decision }),
       });
     } else {
-      // Approval item may not exist (e.g. message moved to AWAITING_APPROVAL
-      // without going through the standard flow) — fall back to a direct
-      // status update so the human-in-the-loop gate is never a dead end.
-      await setStatus(decision === "APPROVED" ? "APPROVED" : "DRAFT");
+      throw new Error("No pending approval exists. Refresh this prospect through a scan.");
     }
     onChanged();
   };
@@ -95,8 +102,22 @@ function OutreachCard({ message, onChanged }: { message: OutreachMessage; onChan
       </div>
       {message.subject && <p className="mb-1 text-sm font-medium text-black/80">{message.subject}</p>}
       <pre className="mb-3 whitespace-pre-wrap rounded-md bg-black/[0.03] p-3 text-xs leading-relaxed text-black/70">{message.body}</pre>
-      <p className="mb-3 text-xs italic text-black/40">Angle: {message.angle}</p>
+      <p className="mb-2 text-xs italic text-black/40">Angle: {message.angle}</p>
+      <div className="mb-3 flex flex-wrap gap-x-4 gap-y-1 text-xs text-black/45">
+        <span>Last contact: {message.sentAt ? new Date(message.sentAt).toLocaleDateString() : "not yet sent"}</span>
+        {message.replyNote && <span>Reply: {message.replyNote}</span>}
+        {message.nextAction && <span>Next action: {message.nextAction}</span>}
+      </div>
+      {(message.status === "SENT" || message.status === "FOLLOW_UP_DUE") && (
+        <div className="mb-3 flex flex-wrap items-end gap-2 rounded-md border border-dashed border-black/15 p-2">
+          <label className="text-xs">Reply note<input className="ml-2 w-48 border p-1 text-xs" value={replyNote} onChange={(e) => setReplyNote(e.target.value)} placeholder="What did they say?" /></label>
+          <label className="text-xs">Next action<input className="ml-2 w-40 border p-1 text-xs" value={nextAction} onChange={(e) => setNextAction(e.target.value)} placeholder="e.g. send proposal" /></label>
+          <Button size="sm" variant="secondary" onClick={() => setStatus("REPLIED", { replyNote, nextAction })}>Record reply</Button>
+        </div>
+      )}
 
+      {(message.status === "APPROVED" || message.channel === "LINKEDIN") && <label className="mb-2 flex gap-2 text-xs"><input type="checkbox" checked={manualConfirmed} onChange={e=>setManualConfirmed(e.target.checked)} />I actually sent this message outside the app</label>}
+      <Button size="sm" variant="secondary" onClick={copy}>{copied ? "Copied" : "Copy draft"}</Button>
       <div className="flex flex-wrap gap-2">
         {message.channel === "EMAIL" ? (
           <>
@@ -116,8 +137,8 @@ function OutreachCard({ message, onChanged }: { message: OutreachMessage; onChan
               </>
             )}
             {message.status === "APPROVED" && (
-              <Button size="sm" accent="scout" onClick={() => setStatus("SENT")}>
-                Mark as sent (connect an email provider to send automatically)
+              <Button size="sm" accent="scout" onClick={() => setStatus("SENT")} disabled={!manualConfirmed}>
+                Record external send
               </Button>
             )}
             {message.status === "SENT" && (
@@ -185,7 +206,7 @@ export default function ProspectDetailPage() {
   return (
     <main className="mx-auto min-h-screen max-w-4xl px-6 py-10">
       <Link href="/scout" className="mb-4 inline-flex items-center gap-1.5 text-xs font-medium text-black/40 hover:text-black/70">
-        ← Company Scout
+        ← Growth Agent
       </Link>
 
       <div className="mb-6 flex flex-wrap items-start justify-between gap-4">
@@ -231,12 +252,12 @@ export default function ProspectDetailPage() {
                 </span>
               </div>
               <ProgressBar value={b.score} max={b.max} colorClass="bg-scout" />
-              <p className="mt-1 text-xs text-black/45">{b.why}</p>
+              <p className="mt-1 text-xs text-black/45">{b.why}</p><div className="text-xs">{b.evidenceIds.map((id,i)=><a key={id} className="mr-2 underline" href={`#evidence-${id}`}>Evidence {i+1}</a>)}</div>
             </div>
           ))}
         </div>
         <div className="rounded-lg bg-black/[0.03] p-3">
-          <p className="mb-1.5 text-xs font-semibold uppercase tracking-wide text-black/40">Why this prospect, in short</p>
+          <p className="mb-1.5 text-xs font-semibold uppercase tracking-wide text-black/40">Why now</p>
           <ul className="space-y-1 text-sm text-black/65">
             {why.map((w, i) => (
               <li key={i}>• {w}</li>
@@ -246,7 +267,7 @@ export default function ProspectDetailPage() {
       </Card>
 
       <Card className="mb-6">
-        <SectionHeading eyebrow="Recommended fit" title={prospect.useCase ?? "—"} detail={prospect.useCaseRationale ?? undefined} />
+        <SectionHeading eyebrow="Wonderful use case" title={prospect.useCase ?? "—"} detail={prospect.useCaseRationale ?? undefined} />
       </Card>
 
       <Card className="mb-6">
@@ -259,12 +280,12 @@ export default function ProspectDetailPage() {
         ) : (
           <div className="space-y-2">
             {evidence.map((e) => (
-              <div key={e.id} className="rounded-lg border border-black/5 p-3 text-sm">
+              <div id={`evidence-${e.id}`} key={e.id} className="rounded-lg border border-black/5 p-3 text-sm">
                 <div className="flex items-start justify-between gap-2">
                   <a href={e.sourceUrl} target="_blank" rel="noreferrer" className="font-medium text-black/75 hover:underline">
                     {e.sourceName}
                   </a>
-                  <span className="text-xs text-black/40">{Math.round(e.confidence * 100)}% confidence</span>
+                  <span className="text-xs text-black/40">{e.isDemo ? "Synthetic — unverified" : `${Math.round(e.confidence * 100)}% confidence`}</span>
                 </div>
                 <p className="mt-1 text-black/55">{e.snippet}</p>
                 <p className="mt-1 text-xs text-black/35">
@@ -277,24 +298,66 @@ export default function ProspectDetailPage() {
       </Card>
 
       <Card className="mb-6">
-        <SectionHeading eyebrow="Likely buyers" title="Decision makers" />
-        <div className="grid grid-cols-1 gap-2 sm:grid-cols-2">
-          {prospect.decisionMakers.map((dm) => (
-            <div key={dm.id} className="rounded-lg border border-black/5 p-3 text-sm">
-              <p className="font-medium text-black/75">{dm.title}</p>
-              <p className="text-xs text-black/40">{dm.name} · {Math.round(dm.confidence * 100)}% confidence this role is the right buyer</p>
+        <SectionHeading eyebrow="Target people" title="Decision makers & outreach" detail="Email stays approval-gated by default. LinkedIn is always a manual handoff." />
+        <div className="space-y-5">
+          {prospect.decisionMakers.map((dm) => {
+            const messages = prospect.outreach.filter((m) => m.decisionMakerId === dm.id);
+            const orphaned = dm === prospect.decisionMakers[0] ? prospect.outreach.filter((m) => !m.decisionMakerId) : [];
+            return (
+              <div key={dm.id} className="rounded-lg border border-black/10 p-4">
+                <div className="mb-1 flex items-center justify-between">
+                  <p className="font-medium text-black/80">
+                    {dm.isReal ? dm.name : dm.title} {dm.isReal && <Badge tone="positive" className="ml-1">Real target</Badge>}
+                  </p>
+                  <span className="text-xs text-black/40">{dm.isReal ? `${Math.round(dm.confidence * 100)}% confidence` : "Role hypothesis, not a verified contact"}</span>
+                </div>
+                {dm.isReal && <p className="mb-1 text-xs text-black/50">{dm.title}{dm.email ? ` · ${dm.email}` : ""}{dm.linkedinUrl ? ` · ${dm.linkedinUrl}` : ""}</p>}
+                {dm.whyThisPerson && <p className="mb-3 text-xs italic text-black/45">Why this person: {dm.whyThisPerson}</p>}
+                <div className="space-y-3">
+                  {[...messages, ...orphaned].map((m) => (
+                    <OutreachCard key={m.id} message={m} onChanged={load} />
+                  ))}
+                  {messages.length === 0 && orphaned.length === 0 && <EmptyState title="No outreach drafted for this person yet" />}
+                </div>
+              </div>
+            );
+          })}
+          {prospect.decisionMakers.length === 0 && (
+            <div className="space-y-3">
+              {prospect.outreach.map((m) => (
+                <OutreachCard key={m.id} message={m} onChanged={load} />
+              ))}
             </div>
-          ))}
+          )}
         </div>
       </Card>
 
+      {prospect.status === "REPLIED" && (
+        <Card className="mb-6 border-emerald-200 bg-emerald-50/40">
+          <SectionHeading eyebrow="Reply received" title="Book a meeting?" detail="Marks the deal at the final pipeline stage." />
+          <Button
+            size="sm"
+            accent="scout"
+            onClick={async () => {
+              await fetch(`/api/scout/prospects/${params.id}`, { method: "PATCH", headers: { "content-type": "application/json" }, body: JSON.stringify({ status: "MEETING_BOOKED" }) });
+              load();
+            }}
+          >
+            Mark meeting booked
+          </Button>
+        </Card>
+      )}
+      {prospect.status === "MEETING_BOOKED" && (
+        <Card className="mb-6 border-emerald-300 bg-emerald-50">
+          <Badge tone="positive">Meeting booked</Badge>
+        </Card>
+      )}
+
       <Card>
-        <SectionHeading eyebrow="Outreach workflow" title="Drafted outreach" detail="Email stays approval-gated by default. LinkedIn is always a manual handoff." />
-        <div className="space-y-3">
-          {prospect.outreach.map((m) => (
-            <OutreachCard key={m.id} message={m} onChanged={load} />
-          ))}
-        </div>
+        <SectionHeading title="Score history" detail="Each evaluation preserves its score; unchanged inputs should give unchanged scores." />
+        {prospect.scoreHistory.map((h, i) => (
+          <p key={i} className="text-sm">{new Date(h.recordedAt).toLocaleString()} — {h.score}/100</p>
+        ))}
       </Card>
     </main>
   );

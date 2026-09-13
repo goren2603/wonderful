@@ -10,7 +10,7 @@ export type RunStatus = (typeof RUN_STATUSES)[number];
 export const APPROVAL_KINDS = ["SOURCING_WEIGHT_CHANGE", "OUTREACH_EMAIL"] as const;
 export type ApprovalKind = (typeof APPROVAL_KINDS)[number];
 
-export const APPROVAL_STATUSES = ["PENDING", "APPROVED", "REJECTED"] as const;
+export const APPROVAL_STATUSES = ["PENDING", "APPROVED", "REJECTED", "SUPERSEDED"] as const;
 export type ApprovalStatus = (typeof APPROVAL_STATUSES)[number];
 
 export const FEEDBACK_TARGETS = ["PROSPECT", "ALERT", "TALENT_INSIGHT"] as const;
@@ -25,6 +25,11 @@ export type InsightKind = (typeof INSIGHT_KINDS)[number];
 export const CONFIDENCE_LEVELS = ["LOW", "MEDIUM", "HIGH"] as const;
 export type ConfidenceLevel = (typeof CONFIDENCE_LEVELS)[number];
 
+// Underlying stored values are unchanged from the original build (NEW/
+// RESEARCHED/SCORED/...) to avoid touching the agent/approval state machine
+// and its tests. MEETING_BOOKED is new. The Growth Agent pipeline UI displays
+// these through `pipelineStage()` in scoutScoring.ts, which also folds in the
+// opportunity score to distinguish "discovered" from "qualified".
 export const PROSPECT_STATUSES = [
   "NEW",
   "RESEARCHED",
@@ -32,8 +37,12 @@ export const PROSPECT_STATUSES = [
   "OUTREACH_READY",
   "CONTACTED",
   "REPLIED",
+  "MEETING_BOOKED",
 ] as const;
 export type ProspectStatus = (typeof PROSPECT_STATUSES)[number];
+
+export const PIPELINE_STAGES = ["DISCOVERED", "QUALIFIED", "OUTREACH_READY", "CONTACTED", "REPLIED", "MEETING_BOOKED"] as const;
+export type PipelineStage = (typeof PIPELINE_STAGES)[number];
 
 export const OUTREACH_CHANNELS = ["EMAIL", "LINKEDIN"] as const;
 export type OutreachChannel = (typeof OUTREACH_CHANNELS)[number];
@@ -54,7 +63,7 @@ export type AudienceLens = (typeof AUDIENCE_LENSES)[number];
 export const SENTIMENTS = ["POSITIVE", "NEGATIVE", "NEUTRAL"] as const;
 export type Sentiment = (typeof SENTIMENTS)[number];
 
-export const ALERT_TYPES = ["RISK", "OPPORTUNITY"] as const;
+export const ALERT_TYPES = ["RISK", "OPPORTUNITY", "PRODUCT_SIGNAL"] as const;
 export type AlertType = (typeof ALERT_TYPES)[number];
 
 export const SEVERITIES = ["LOW", "MEDIUM", "HIGH"] as const;
@@ -62,6 +71,9 @@ export type Severity = (typeof SEVERITIES)[number];
 
 export const ALERT_STATUSES = ["OPEN", "ACKNOWLEDGED", "DISMISSED"] as const;
 export type AlertStatus = (typeof ALERT_STATUSES)[number];
+
+export const ALERT_STATES = ["WORSENING", "IMPROVING", "STABLE", "RESOLVED"] as const;
+export type AlertState = (typeof ALERT_STATES)[number];
 
 export interface ScoreComponent {
   label: string;

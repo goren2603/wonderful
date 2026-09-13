@@ -1,155 +1,74 @@
 # Wonderful Intelligence
 
-One launcher, three autonomous intelligence products for Wonderful, sharing a common agent
-infrastructure (database, scheduler, evidence store, approval layer, audit log).
+Three products on the existing Next.js 14 + TypeScript + Prisma/SQLite application:
 
-- **Talent Intelligence** — closed-loop recruiting analytics. Learns which sourced candidates
-  actually became successful hires, computes real correlations (with sample size and
-  confidence, never causal claims), and proposes sourcing-weight changes that require human
-  approval before they'd apply.
-- **Company Scout** — an autonomous enterprise-prospecting agent for Germany, the UK, France,
-  Italy, and the Netherlands (more countries are a one-line addition). Discovers companies,
-  scores them with an explainable breakdown, finds likely decision-maker roles, and drafts
-  outreach (email stays approval-gated; LinkedIn is always a manual copy/paste handoff).
-- **External Radar** — an early-warning intelligence agent. Turns individual mentions into
-  themes, themes into trends, and trends into confidence-scored risk/opportunity alerts, with
-  an audience-lens switch (Candidate / Customer / Executive / Investor).
+- **Talent Intelligence:** learn an exploratory sourcing model from recorded post-hire outcomes, compare original/proposed/approved ranks, and approve a complete model version.
+- **Company Scout:** select markets and sectors, evaluate a sample company directory with explicit scoring rules, inspect evidence and score history, and review outreach drafts.
+- **External Radar:** classify stored mentions into themes, calculate historical trends, and surface threshold-based risk/opportunity alerts for each audience.
 
-All three write to shared `AgentRun` / `ApprovalItem` / `Evidence` / `AuditLogEntry` tables so
-every autonomous action is inspectable — click into any run, prospect, or alert to see exactly
-why the system did what it did.
+This is a **functional demo using synthetic data**, not a live web-monitoring or recruiting integration. Read [REVIEW.md](REVIEW.md) for the engineering/product findings and remaining work.
 
-## Demo data, clearly labeled
+## Run locally
 
-There's no live web-search or ATS/HRIS credential in this environment, so:
+Node 22 and npm are the tested defaults.
 
-- Talent Intelligence ships with 220 synthetic (but statistically realistic) candidates —
-  generated with real, documented signal baked in, so the correlation engine has to actually
-  find it rather than being handed the answer.
-- Company Scout targets **real company names** (that's the point of a prospecting tool), but
-  every piece of "evidence" attached to them is explicitly synthetic and labeled `Demo data` /
-  `isDemo: true`, and every source link points at a real top-level domain (the company's own
-  site, or a real platform's homepage) — never a fabricated article or review URL. Decision
-  makers are represented as **roles**, not invented named individuals.
-- External Radar defaults to tracking "Wonderful" itself with the same clearly-labeled synthetic
-  mentions. You can add any other company from the product UI — it starts empty until you
-  connect a live source or seed it.
-
-Swapping in real providers later is a config change, not a rewrite — see `src/lib/llm.ts` and
-`src/lib/research.ts`.
-
-## Stack
-
-Next.js 14 (App Router, TypeScript) + Prisma + SQLite, Tailwind, Recharts, a small in-process
-cron scheduler (`croner`). Chosen for speed: one deployable app, zero external services required
-to run locally.
-
-## Local setup
-
-```bash
-npm install
-npm run seed      # populates ~220 candidates, ~30 prospects, and radar signal history
+```sh
+npm ci
+# Copy .env.example to .env; DATABASE_URL=file:./dev.db resolves relative to prisma/schema.prisma.
+npx prisma migrate deploy
+npm run seed  # DESTRUCTIVE: resets this database to synthetic fixtures; never run on real data.
 npm run dev
 ```
 
-Open http://localhost:3000. `npm run seed` is destructive (it clears and regenerates demo data) —
-safe to re-run any time you want a fresh dataset.
+For an existing database, do NOT seed again. Start the app, rerun Talent analysis, refresh Scout, and analyze Radar to derive updated results while preserving records.
 
-### Environment variables (all optional — see `.env.example`)
+```sh
+npm test
+npm run typecheck
+npm run build
+npm start
+```
 
-| Variable | Effect if unset |
+Install generates Prisma; build compiles the app without replacing Prisma's engine DLL while a Windows server is running. After schema edits, stop the server and run `npm run prisma:generate`. Build no longer migrates a running database. Run migrations explicitly before serving traffic. The build requires access to Google Fonts for its existing Inter font.
+
+## What is real
+
+- Correlations, Fisher confidence intervals, complete-outcome sample counts, signed learning coefficients, and candidate ranking are calculated from SQLite records. No geography or education features are used. The model is exploratory, correlational and **not holdout-validated**. Retention is not corrected for tenure opportunity.
+- Analyses retain their findings and ranking snapshots. Approval saves the entire coefficient vector and normalization data in an append-only `active_model_approved` audit entry. The active ranking reads that saved version; a new proposal does not silently replace it. Sliders are a temporary simulation.
+- Scout calls `ResearchProvider.discover/research`, deduplicates normalized company/country identities, prefers undiscovered then oldest-researched prospects, stores evidence and score history, and preserves human outreach state on rescans. Scores are rule-based scenario fit, not a calibrated buying probability. Directory employee counts and sector priors are unverified assumptions.
+- Radar classifies mention text using disclosed keyword rules. Eight weekly buckets include zeros. The last three calendar weeks (current week partial) are compared against five earlier weeks. An alert requires three recent mentions, two distinct domains, and 60% directional sentiment (or explicit competitor instability). Synthetic records always receive low confidence. Lenses recompute the same analysis for the selected audience.
+- Approval and outreach transitions are transactional. Approval never sends email. Recording an external send requires explicit confirmation, then replies advance prospect state. LinkedIn is manual. Feedback is saved for review; it does **not** train scoring.
+- All agents persist runs, errors, steps and audit entries. CSV ingestion validates ranges and imports each row atomically; file/row fingerprints deduplicate retry attempts. Optional `candidateId` updates an existing record.
+
+## Providers and access
+
+| Setting | Implemented behavior |
 |---|---|
-| `DATABASE_URL` | Defaults to a local SQLite file — zero setup |
-| `ANTHROPIC_API_KEY` | Talent Intelligence's narrative interpretation runs in a deterministic "demo" mode (real numbers, templated prose) instead of calling a live model |
-| `SEARCH_PROVIDER_API_KEY` | Company Scout / Radar use the built-in demo research provider instead of live search |
-| `EMAIL_PROVIDER_API_KEY` | Outreach emails stay in Draft/Awaiting Approval — nothing is ever sent automatically |
-| `CRON_SECRET` | If set, external cron calls to `GET /api/agents/run` must send `Authorization: Bearer <value>` |
+| `DATABASE_URL` | Required SQLite URL; example uses `file:./dev.db`. PostgreSQL needs schema and migration changes, not just a URL change. |
+| `ANTHROPIC_API_KEY` / `ANTHROPIC_MODEL` | Optional real Talent narrative call, with a 15-second timeout and computed-summary fallback. It does not discover evidence or train the ranking model. |
+| `SEARCH_PROVIDER_API_KEY` | Reserved. **No live adapter is implemented.** A key alone does nothing. Implement `ResearchProvider` discovery/research and a Radar ingestion adapter with verified provenance. |
+| `EMAIL_PROVIDER_API_KEY` | Reserved. **No delivery adapter is implemented.** Requires recipients, sender setup, provider receipts and delivery webhooks. |
+| `CRON_SECRET` | Required for external GET cron requests; unset means external cron is disabled. Local scheduling needs no secret. |
+| `DEMO_ACCESS_TOKEN` | Optional HTTP Basic gate for the entire demo; use any username and this token as password. Keep it in environment secrets. Without this or upstream Cloudflare Access, anyone with the tunnel URL can read and change demo data. |
+| `DISABLE_SCHEDULER=1` | Disable the in-process scheduler for tests/builds. |
+| `NEXT_DIST_DIR` | Optional separate build directory, used to test production without replacing development build files. |
 
-## How scheduling works
+Do not import real candidate/customer data into an unprotected public demo. HTTP Basic over the tunnel's HTTPS or upstream Cloudflare Access is a demo gate; this is not multi-tenant authentication. In-memory rate limits and origin checks are defense in depth, not a distributed abuse-control service.
 
-`src/instrumentation.ts` starts an in-process scheduler (`src/lib/scheduler.ts`) on server boot —
-this works as long as the app runs as a **persistent Node process** (local dev, Docker, Render,
-Fly, Railway). Default schedule: Company Scout daily at 07:00, External Radar every 6 hours,
-Talent Intelligence weekly. Edit `DEFAULT_JOBS` in `scheduler.ts`, or the `ScheduledJob` rows in
-the database, to change cadence — nothing is hardcoded to a single interval.
+## Scheduling and persistence
 
-If you deploy to a serverless platform (Vercel) instead, the process doesn't stay alive between
-requests, so the scheduler won't fire on its own — use `vercel.json`'s Cron Jobs (already
-configured) to hit `GET /api/agents/run?agentKey=...` on a schedule instead.
+A persistent Node process polls `ScheduledJob.nextRunAt` every 15 seconds. Schedules use **UTC**: Scout daily 07:00; Radar every 6 hours; Talent Mondays 06:00. Existing persisted due dates survive restart and missed jobs are picked up. Disabled jobs are skipped. A database lease prevents overlapping manual/scheduled runs; expired 15-minute leases are recovered. Failed scheduled attempts persist bounded 1/2-minute retries, then return to the normal cadence. Provider operations have bounded retries; Talent narrative failure preserves computed results.
 
-## Deployment
+SQLite is suitable for this single-instance demo. Use a persistent volume and backups. The Dockerfile stores data at `/app/data/dev.db`, runs migrations, seeds only a truly empty database, and fails startup if migration/seeding fails. The Render example uses an ephemeral free instance: records will not survive replacement unless you configure a durable disk. Mount persistence at `/app/data`.
 
-**The app needs zero infrastructure from you beyond picking a host and connecting your GitHub
-account — that step genuinely can't be done on your behalf, since it requires your own login.**
+Vercel cron configuration is included, but **the SQLite deployment is not serverless-ready**. A PostgreSQL port, authentication, request/runtime constraints and distributed job execution need validation first. The in-process scheduler is disabled on Vercel.
 
-### Option A — Render (recommended: simplest full-featured path)
+## Integration regression suite
 
-Persistent Node process, so the in-process scheduler works out of the box and SQLite just works.
+Make a copy of the database named `review-test.db`, set `DATABASE_URL` to its absolute file URL, then run:
 
-1. Push this repo to GitHub (see below).
-2. Go to [render.com](https://render.com) → New → Blueprint → connect the repo. Render reads
-   `render.yaml` automatically and deploys the Dockerfile.
-3. Click Deploy. First boot runs migrations and seeds demo data automatically.
-
-Render's free tier disk is ephemeral (reset on redeploy) — fine for a demo; the container
-reseeds itself on start if the database is empty (`scripts/seed-if-empty.js`). For durable
-production data, add a paid persistent disk in the Render dashboard, or swap `DATABASE_URL` to a
-hosted Postgres (see below) — either is a config change, not a code change.
-
-### Option B — Fly.io / Railway
-
-Same Dockerfile works as-is; both support persistent volumes if you want SQLite data to survive
-redeploys. Point a volume at `/app/prisma` and set `DATABASE_URL=file:./prisma/dev.db`.
-
-### Option C — Vercel (fastest click-to-deploy, needs one extra step)
-
-Vercel's serverless functions don't keep a process alive, so:
-
-1. Provision a free Postgres database (e.g. [Neon](https://neon.tech) or Vercel Postgres) and
-   change `prisma/schema.prisma`'s datasource `provider` to `"postgresql"`, then
-   `npx prisma migrate dev` once locally against that URL to regenerate migrations.
-2. Import the repo into Vercel, set `DATABASE_URL` to the Postgres connection string.
-3. `vercel.json` already defines the three Cron Jobs that replace the in-process scheduler.
-
-### Pushing this repo to GitHub
-
-```bash
-git remote add origin https://github.com/<you>/wonderful-intelligence.git
-git push -u origin main
+```sh
+node --import tsx scripts/integration-test.ts
 ```
 
-## Working with OpenAI Codex
-
-This project is set up to be opened directly in the Codex app.
-
-### Opening this folder in Codex on Windows
-
-1. Install the Codex app (or the Codex CLI/IDE extension you use) if you haven't already.
-2. Open the Codex app.
-3. Choose **Open Folder** (or **Open Project**) from the Codex app's start screen or File menu.
-4. Navigate to and select this folder:
-   ```
-   C:\wonderful.ai\wonderful-demo
-   ```
-5. Confirm/open — Codex will load the repository at that path and pick up this `README.md` and
-   `.gitignore` automatically.
-
-If your Codex app instead prompts for a Git remote URL rather than a local folder, push this
-repository to your Git host (e.g. GitHub) first, then provide that URL when opening the project
-in Codex.
-
-## Project layout
-
-```
-prisma/schema.prisma       shared data model for all three products
-prisma/seed.ts             demo data generation + initial agent runs
-src/lib/agents/            talentAgent.ts, scoutAgent.ts, radarAgent.ts — the actual agent logic
-src/lib/scheduler.ts        in-process job scheduler
-src/lib/llm.ts               LLM provider abstraction (demo + live)
-src/lib/research.ts          web research provider abstraction (demo + live)
-src/app/(page.tsx)          launcher / "Digital Workforce" control room
-src/app/talent/             Talent Intelligence product
-src/app/scout/              Company Scout product
-src/app/radar/              External Radar product
-src/app/api/                REST API routes backing all three products
-```
+The script refuses databases whose URL does not contain `review-test`. It exercises real agents, APIs, approval gates, persisted scheduling and CSV ingestion. It modifies only that disposable copy; never point it at the public demo.

@@ -7,7 +7,7 @@ const { PrismaClient } = require("@prisma/client");
 async function main() {
   const db = new PrismaClient();
   try {
-    const count = await db.candidate.count();
+    const count = (await db.candidate.count()) + (await db.prospect.count()) + (await db.company.count()) + (await db.agentRun.count());
     if (count === 0) {
       console.log("Database is empty — running seed...");
       execSync("npx tsx prisma/seed.ts", { stdio: "inherit" });
@@ -21,5 +21,5 @@ async function main() {
 
 main().catch((err) => {
   console.error(err);
-  process.exit(0); // never block startup on a seed failure
+  process.exit(1); // fail visibly instead of serving a broken or partially seeded app
 });

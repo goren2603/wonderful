@@ -3,7 +3,7 @@
 // but never claims causation and never reports a finding without its n.
 
 export function mean(xs: number[]): number {
-  return xs.reduce((a, b) => a + b, 0) / xs.length;
+  return xs.length ? xs.reduce((a, b) => a + b, 0) / xs.length : 0;
 }
 
 export function stddev(xs: number[]): number {
@@ -15,6 +15,7 @@ export function stddev(xs: number[]): number {
 /** Pearson correlation coefficient between two equal-length numeric arrays. */
 export function pearsonCorrelation(x: number[], y: number[]): number {
   const n = x.length;
+  if (x.length !== y.length || [...x, ...y].some(v => !Number.isFinite(v))) throw new Error("Correlation requires equal-length finite arrays");
   if (n < 2) return 0;
   const mx = mean(x);
   const my = mean(y);
@@ -33,25 +34,29 @@ export function pearsonCorrelation(x: number[], y: number[]): number {
   return num / denom;
 }
 
-/**
- * Approximate two-tailed significance of a correlation using the t
- * approximation (r * sqrt(n-2) / sqrt(1-r^2)), then a logistic approximation
- * of the t-distribution's tail. This is intentionally a coarse approximation
- * — good enough to bucket findings into confidence tiers, not to publish.
- */
+/** Two-sided Student-t significance for Pearson correlation; independent normal observations assumed. */
 export function approxPValue(r: number, n: number): number {
   if (n < 3) return 1;
-  const rClamped = Math.max(-0.999, Math.min(0.999, r));
-  const df = n - 2;
-  const t = (rClamped * Math.sqrt(df)) / Math.sqrt(1 - rClamped * rClamped);
-  const absT = Math.abs(t);
-  // Coarse tail approximation (converges toward the normal tail as df grows).
-  // Adequate for bucketing findings into confidence tiers, not for publication.
-  const p = df / (df + absT * absT);
-  return Math.max(0.0001, Math.min(1, p));
+  // Student-t two-sided tail via a trigonometric beta integral (Simpson quadrature).
+  const integral = (end: number) => {
+    const steps = 1024, h = end / steps;
+    const f = (x: number) => Math.sin(x) ** (n - 3);
+    let sum = f(0) + f(end);
+    for (let i=1;i<steps;i++) sum += (i%2 ? 4 : 2)*f(i*h);
+    return sum*h/3;
+  };
+  return Math.max(0, Math.min(1, integral(Math.acos(Math.min(1,Math.abs(r))))/integral(Math.PI/2)));
 }
 
 export type ConfidenceLevel = "LOW" | "MEDIUM" | "HIGH";
+
+/** Approximate Fisher-z interval; exploratory, assumes independent observations. */
+export function correlationInterval(r: number, n: number): [number, number] | null {
+  if (n <= 3) return null;
+  const z = Math.atanh(Math.max(-.999999, Math.min(.999999, r)));
+  const margin = 1.96 / Math.sqrt(n - 3);
+  return [Math.tanh(z - margin), Math.tanh(z + margin)];
+}
 
 /**
  * Sample-size- and effect-size-aware confidence tier. Small samples are
@@ -60,6 +65,8 @@ export type ConfidenceLevel = "LOW" | "MEDIUM" | "HIGH";
  */
 export function confidenceFromStats(n: number, r: number): ConfidenceLevel {
   const absR = Math.abs(r);
+  const ci = correlationInterval(r, n);
+  if (!ci || (ci[0] <= 0 && ci[1] >= 0)) return "LOW";
   if (n < 20) return "LOW";
   if (n < 50) return absR >= 0.35 ? "MEDIUM" : "LOW";
   if (absR >= 0.3 && n >= 100) return "HIGH";
