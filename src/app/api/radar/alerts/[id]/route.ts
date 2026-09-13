@@ -8,7 +8,7 @@ export async function GET(req:Request,{params}:{params:{id:string}}) {
   const lens=new URL(req.url).searchParams.get('lens');
   const all=alert.themeId?await db.mention.findMany({where:{themeId:alert.themeId,...(lens?{audienceLens:lens}:{})},orderBy:{sourceDate:'asc'}}):[];
   const analysis=analyzeTheme(alert.theme?.label??'',all);
-  return NextResponse.json({alert:{...alert,evidenceCount:analysis.evidenceCount,baseline:analysis.baseline,trend:analysis.trendText,aiExplanation:analysis.explanation,recommendedAction:analysis.action,confidence:analysis.confidence,severity:analysis.severity,type:analysis.type,state:analysis.state},mentions:analysis.recent,trend:analysis.trend});
+  return NextResponse.json({alert:{...alert,evidenceCount:analysis.evidenceCount,baseline:analysis.baseline,trend:analysis.trendText,aiExplanation:analysis.explanation,recommendedAction:analysis.action,confidence:analysis.confidence,severity:analysis.severity,type:analysis.type,state:analysis.state,lastWeekCount:analysis.lastWeekCount,executiveCount:analysis.executiveCount},mentions:analysis.recent,trend:analysis.trend});
 }
 export async function PATCH(req:Request,{params}:{params:{id:string}}) {
   const body=await req.json().catch(()=>({}));

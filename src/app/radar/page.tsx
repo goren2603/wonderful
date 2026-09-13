@@ -35,6 +35,8 @@ interface Alert {
   recommendedAction: string;
   status: string;
   themeId: string | null;
+  lastWeekCount: number;
+  executiveCount: number;
 }
 interface Mention {
   id: string;
@@ -51,6 +53,7 @@ interface Overview {
   alerts: Alert[];
   mentions: Mention[];
   sentimentCounts: Record<string, number>;
+  executiveMentionCount: number;
 }
 
 const TYPE_STYLE: Record<Alert["type"], { border: string; bg: string; text: string; label: string }> = {
@@ -71,7 +74,8 @@ function SignalCard({ alert, lens }: { alert: Alert; lens: string }) {
         <Badge tone={alert.state === "WORSENING" ? "negative" : alert.state === "IMPROVING" ? "positive" : "neutral"}>{alert.state.toLowerCase()}</Badge>
       </div>
       <p className="text-sm font-semibold text-black/85">{alert.title.replace(/^(Risk|Opportunity|Signal): /, "")}</p>
-      <p className="text-xs text-black/55">{alert.trend}</p>
+      <p className="text-sm font-medium text-black/70">{alert.lastWeekCount} this week{alert.executiveCount > 0 ? ` · ${alert.executiveCount} from executives` : ""}</p>
+      <p className="text-xs text-black/45">{alert.trend}</p>
       <p className="line-clamp-2 text-xs text-black/45">{alert.aiExplanation}</p>
       <div className="mt-1 flex items-center justify-between">
         <ConfidenceBadge level={alert.confidence} />
@@ -197,8 +201,9 @@ export default function RadarPage() {
               {c.name}{c.isDefault && " (sample data)"}
             </button>
           ))}
-          <div className="flex items-center gap-1">
-            <input value={newCompanyName} onChange={(e) => setNewCompanyName(e.target.value)} placeholder="Add a real competitor…" className="w-40 rounded-full border border-black/10 px-3 py-1 text-xs" onKeyDown={(e) => e.key === "Enter" && addCompany()} disabled={addingCompany} />
+          <div className={`flex items-center gap-2 rounded-xl2 border-2 border-dashed px-3 py-1.5 transition ${addingCompany ? "border-radar bg-radar-soft" : "border-black/15"}`}>
+            <span className="text-sm text-black/30">🔍</span>
+            <input value={newCompanyName} onChange={(e) => setNewCompanyName(e.target.value)} placeholder="Track a competitor by name…" className="w-48 bg-transparent text-xs outline-none placeholder:text-black/40" onKeyDown={(e) => e.key === "Enter" && addCompany()} disabled={addingCompany} />
             <Button size="sm" variant="secondary" onClick={addCompany} disabled={addingCompany}>{addingCompany ? "Fetching real data…" : "Add"}</Button>
           </div>
         </div>
@@ -219,8 +224,14 @@ export default function RadarPage() {
         </div>
       ) : overview.alerts.length === 0 && overview.themes.length === 0 ? (
         <>
-          <EmptyState title={`No signal tracked yet for ${activeCompany}`} detail="No live provider is connected in this environment. Load the sample scenario to explore clustering and alerts for this company." />
-          <div className="mt-4"><Button variant="secondary" onClick={loadScenario}>Load sample scenario</Button></div>
+          {overview.company.isDefault ? (
+            <>
+              <EmptyState title={`No signal tracked yet for ${activeCompany}`} detail="No mentions loaded yet. Load the sample scenario to explore clustering and alerts for this company." />
+              <div className="mt-4"><Button variant="secondary" onClick={loadScenario}>Load sample scenario</Button></div>
+            </>
+          ) : (
+            <EmptyState title={`No live public evidence found yet for ${activeCompany}`} detail="This company was searched against real public sources (Wikipedia, Hacker News) and nothing usable came back — check the spelling, or it may just have little public footprint. It's rechecked automatically on every scan." />
+          )}
           {scanMsg && <p className="mt-3 text-sm text-black/50">{scanMsg}</p>}
         </>
       ) : (
@@ -230,6 +241,7 @@ export default function RadarPage() {
             <span>{alertsByType.RISK} risk</span>
             <span>{alertsByType.OPPORTUNITY} opportunity</span>
             <span>{alertsByType.PRODUCT_SIGNAL} product signal</span>
+            <span>· {overview.executiveMentionCount} mentions from an executive audience</span>
           </div>
           <div className="mb-8 grid grid-cols-1 gap-3 md:grid-cols-2">
             {overview.alerts.map((a) => (

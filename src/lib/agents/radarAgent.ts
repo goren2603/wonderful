@@ -51,16 +51,24 @@ async function ingestLiveMarketMentions(companyId:string):Promise<{fetched:numbe
   }
   return {fetched:hits.length,stored};
 }
-// Any OTHER company you add by name (via "Add any company" in Radar) gets
-// real, live evidence for ITS OWN name — the same keyless Wikipedia +
-// Hacker News lookup Growth Agent uses for a real target — not the fixed
-// "AI agent" market query above. This is what makes "add a competitor and
-// compare it to Wonderful" real: the competitor's mentions are genuinely
-// live; only the default "Wonderful" company stays on seeded scenario data
-// (see AppNotice / researchStatus for why — no real public footprint to
-// search for a placeholder name).
-async function ingestLiveCompanyMentions(companyId:string,companyName:string):Promise<{fetched:number;stored:number}> {
-  const items=await fetchLiveEvidence(companyName);
+// Any company you add by name (via "Add any company" in Radar) gets real,
+// live evidence for ITS OWN name — the same keyless Wikipedia + Hacker News
+// lookup Growth Agent uses for a real target — not the fixed "AI agent"
+// market query above. This is what makes "add a competitor and compare it
+// to Wonderful" real: the competitor's mentions are genuinely live.
+//
+// The default "Wonderful" company gets this too, searched as "wonderful.ai"
+// rather than the bare word "wonderful" — a plain English word is too noisy
+// for a keyword search (see fetchHackerNewsMentions' short-name guard in
+// research.ts for the same reasoning applied to acronym-length names). Real
+// results land alongside the seeded scenario mentions in the same company,
+// each honestly flagged isDemo — expect this to surface little or nothing
+// real for a small/newer company, which is itself an honest result, not a
+// bug.
+export const WONDERFUL_SEARCH_TERM = 'wonderful.ai';
+
+async function ingestLiveCompanyMentions(companyId:string,searchTerm:string):Promise<{fetched:number;stored:number}> {
+  const items=await fetchLiveEvidence(searchTerm);
   let stored=0;
   for(const item of items) {
     const text=`Real, live public mention (${item.sourceName}): "${item.title}" — ${item.snippet.slice(0,300)}`;
@@ -112,13 +120,14 @@ export async function runRadarScan(companyName?:string) {
           liveFetched+=liveIngest.fetched;liveStored+=liveIngest.stored;
           steps.push({label:'Fetching live source',detail:`Hacker News (Algolia search API, last 21 days, query "AI agent"): ${liveIngest.fetched} posts fetched, ${liveIngest.stored} new mentions stored.`,at:new Date().toISOString()});
           await db.agentRun.update({where:{id:run.id},data:{stepsJson:JSON.stringify(steps)}});
-        } else if(!company.isDefault) {
-          // Any company added via "Add any company" that isn't the seeded
-          // default ("Wonderful") gets real live evidence for its own name —
-          // this is what makes a competitor comparison real.
-          liveIngest=await ingestLiveCompanyMentions(company.id,company.name);
+        } else {
+          // Every other tracked company — including the default "Wonderful",
+          // searched as its real domain — gets real live evidence for its
+          // own name.
+          const searchTerm=company.isDefault?WONDERFUL_SEARCH_TERM:company.name;
+          liveIngest=await ingestLiveCompanyMentions(company.id,searchTerm);
           liveFetched+=liveIngest.fetched;liveStored+=liveIngest.stored;
-          steps.push({label:'Fetching live source',detail:`Wikipedia + Hacker News for "${company.name}": ${liveIngest.fetched} real items fetched, ${liveIngest.stored} new mentions stored.`,at:new Date().toISOString()});
+          steps.push({label:'Fetching live source',detail:`Wikipedia + Hacker News for "${searchTerm}": ${liveIngest.fetched} real items fetched, ${liveIngest.stored} new mentions stored.`,at:new Date().toISOString()});
           await db.agentRun.update({where:{id:run.id},data:{stepsJson:JSON.stringify(steps)}});
         }
         const mentions=await db.mention.findMany({where:{companyId:company.id}});
@@ -163,7 +172,7 @@ export async function runRadarScan(companyName?:string) {
         for(const c of spikeCandidates) await maybeSendSpikeEmail(c.themeId,c.label,company.name,c.members);
       }
       const summary=`Reanalyzed ${sourcesChecked} stored mentions across ${companies.length} companies; ${entitiesFound} new alerts, ${actionsCreated} qualifying alerts refreshed.${liveFetched>0?` Live source this run: ${liveFetched} Hacker News posts fetched, ${liveStored} new.`:' 0 web pages fetched this run.'}`;
-      const warnings=[`Only the default "Wonderful" company stays on seeded/scenario mentions (no real public footprint to search for a placeholder name). Every other tracked company — "${LIVE_MARKET_COMPANY_NAME}" and anything added via "Add any company" — is backed by real, live, keyless public sources (Wikipedia, Hacker News search). Keyword clustering and source-count confidence are heuristics either way.`];
+      const warnings=[`Every tracked company — including "Wonderful" (searched as ${WONDERFUL_SEARCH_TERM}) — is checked against real, live, keyless public sources (Wikipedia, Hacker News search) every scan; "Wonderful" also keeps its original seeded scenario mentions alongside whatever real results come back, each individually flagged isDemo. A small/newer real company can honestly surface little or nothing live — that's a real result, not a bug. Keyword clustering and source-count confidence are heuristics either way.`];
       await db.agentRun.update({where:{id:run.id},data:{status:'SUCCEEDED',endedAt:new Date(),durationMs:Date.now()-run.startedAt.getTime(),sourcesChecked,entitiesFound,entitiesAccepted:entitiesFound,actionsCreated,summary,warningsJson:JSON.stringify(warnings),stepsJson:JSON.stringify(steps)}});
       return {runId:run.id,entitiesFound,summary};
     } catch(err) {await db.agentRun.update({where:{id:run.id},data:{status:'FAILED',endedAt:new Date(),errorMessage:err instanceof Error?err.message:String(err),stepsJson:JSON.stringify(steps)}});throw err;}

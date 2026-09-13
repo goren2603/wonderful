@@ -17,6 +17,8 @@ interface AlertDetail {
   evidenceCount: number;
   baseline: string;
   trend: string;
+  lastWeekCount: number;
+  executiveCount: number;
   aiExplanation: string;
   recommendedAction: string;
   status: string;
@@ -96,7 +98,7 @@ export default function AlertDetailPage() {
       </div>
 
       <Card className="mb-6">
-        <SectionHeading eyebrow="What changed" title={alert.trend} />
+        <SectionHeading eyebrow="What changed" title={`${alert.lastWeekCount} this week${alert.executiveCount > 0 ? ` · ${alert.executiveCount} from executives` : ""}`} detail={alert.trend} />
         <TrendLineChart color="#e8622c" data={trend.map((tp) => ({ week: new Date(tp.weekStart).toLocaleDateString(undefined, { month: "short", day: "numeric" }), count: tp.mentionCount }))} />
         <div className="mt-3 grid grid-cols-2 gap-3 text-sm">
           <div>

@@ -31,6 +31,8 @@ export function analyzeTheme(label:string,mentions:SignalMention[],now=new Date(
   // Confidence describes evidence volume/diversity only; synthetic records can never earn high confidence.
   const confidence=recent.some(m=>m.isDemo)?'LOW':recent.length>=10&&sources>=3?'HIGH':recent.length>=5?'MEDIUM':'LOW';
   const baseline=`${earlier.toFixed(2)} mentions/week across 5 earlier calendar weeks (zero weeks included)`;
+  const lastWeekCount=trend[7].mentionCount; // this calendar week specifically (partial — still accumulating), distinct from the 3-week qualifying window below
+  const executiveCount=recent.filter(m=>m.audienceLens==='EXECUTIVE').length;
   const trendText=`${recent.length} mentions in the latest 3 calendar weeks (current week partial); ${growth===null?'new signal / no prior baseline':growth.toFixed(2)+'x baseline'}`;
   const explanation=`Rule: at least 3 recent mentions, 2 distinct source domains and 60% directional sentiment (or explicit competitor instability / market topic trend). Observed ${recent.length} mentions across ${sources} domains: ${negative} negative, ${positive} positive. ${baseline}. ${trendText}. ${recent.some(m=>m.isDemo)?'Synthetic scenario: not evidence about a real company.':'Independent sources and factual claims still require verification.'}`;
   const action=competitor?'Verify the competitor event and affected customer segment before preparing any outreach.':productSignal?'Assess whether this topic intersects a Wonderful use case; consider it as context for Growth Agent outreach angles.':type==='OPPORTUNITY'?'Validate the positive reports and request permission for a customer proof point.':'Review the cited reports with the accountable team; verify the pattern before acting.';
@@ -39,5 +41,5 @@ export function analyzeTheme(label:string,mentions:SignalMention[],now=new Date(
   // the alert no longer meets the qualifying threshold.
   const risingIsGood=type!=='RISK';
   const state:'WORSENING'|'IMPROVING'|'STABLE'|'RESOLVED' = !qualifies?'RESOLVED':growth===null?'STABLE':growth>=1.3?(risingIsGood?'IMPROVING':'WORSENING'):growth<=0.7?(risingIsGood?'WORSENING':'IMPROVING'):'STABLE';
-  return {trend,recent,qualifies,type,severity,confidence,evidenceCount:recent.length,baseline,trendText,explanation,action,growth,sources,state};
+  return {trend,recent,qualifies,type,severity,confidence,evidenceCount:recent.length,baseline,trendText,explanation,action,growth,sources,state,lastWeekCount,executiveCount};
 }
