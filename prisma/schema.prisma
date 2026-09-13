@@ -1,0 +1,348 @@
+// Wonderful Intelligence — shared data model for all three products.
+// SQLite for zero-config local/demo persistence. See README for swapping to Postgres in production.
+//
+// Note: SQLite has no native enum support in Prisma, so "enum-like" fields
+// are plain Strings here. Their allowed values are defined as TS union types
+// in src/lib/types.ts — treat that file as the source of truth.
+
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "sqlite"
+  url      = env("DATABASE_URL")
+}
+
+// ─────────────────────────────────────────────────────────────
+// SHARED AGENT INFRASTRUCTURE
+// ─────────────────────────────────────────────────────────────
+
+model AgentRun {
+  id               String    @id @default(cuid())
+  agent            String // AgentKey
+  goal             String
+  startedAt        DateTime  @default(now())
+  endedAt          DateTime?
+  status           String    @default("RUNNING") // RunStatus
+  sourcesChecked   Int       @default(0)
+  entitiesFound    Int       @default(0)
+  entitiesAccepted Int       @default(0)
+  actionsCreated   Int       @default(0)
+  warningsJson     String    @default("[]")
+  errorMessage     String?
+  durationMs       Int?
+  stepsJson        String    @default("[]") // ordered log of steps for "why did the agent do this" UI
+  summary          String?
+  llmSummary       String? // LLM-generated narrative interpretation of this run's findings
+  llmProvider      String? // "demo" | "live"
+  llmModel         String?
+
+  @@index([agent, startedAt])
+}
+
+model ScheduledJob {
+  id         String    @id @default(cuid())
+  agentKey   String    @unique // AgentKey
+  label      String
+  cronExpr   String
+  enabled    Boolean   @default(true)
+  lastRunAt  DateTime?
+  lastStatus String? // RunStatus
+  lastResult String?
+  nextRunAt  DateTime?
+}
+
+model ApprovalItem {
+  id          String    @id @default(cuid())
+  kind        String // ApprovalKind
+  entityType  String
+  entityId    String
+  title       String
+  payloadJson String    @default("{}")
+  status      String    @default("PENDING") // ApprovalStatus
+  createdAt   DateTime  @default(now())
+  decidedAt   DateTime?
+}
+
+model Feedback {
+  id         String   @id @default(cuid())
+  targetType String // FeedbackTarget
+  targetId   String
+  vote       String // FeedbackVote
+  note       String?
+  createdAt  DateTime @default(now())
+}
+
+model AuditLogEntry {
+  id         String   @id @default(cuid())
+  actor      String
+  action     String
+  entityType String
+  entityId   String
+  detailJson String   @default("{}")
+  createdAt  DateTime @default(now())
+
+  @@index([entityType, entityId])
+}
+
+// Polymorphic evidence store shared by Company Scout and External Radar.
+model Evidence {
+  id         String   @id @default(cuid())
+  entityType String // "PROSPECT" | "ALERT" | "THEME" | "MENTION"
+  entityId   String
+  sourceUrl  String
+  sourceName String
+  sourceDate DateTime
+  title      String
+  snippet    String
+  fetchedAt  DateTime @default(now())
+  confidence Float // 0..1
+  provider   String // "demo" | "live"
+  isDemo     Boolean  @default(true)
+
+  @@index([entityType, entityId])
+}
+
+// ─────────────────────────────────────────────────────────────
+// PRODUCT 1 — TALENT INTELLIGENCE
+// ─────────────────────────────────────────────────────────────
+
+model Candidate {
+  id                    String   @id @default(cuid())
+  name                  String
+  currentTitle          String
+  yearsExperience       Float
+  education             String
+  previousCompaniesJson String   @default("[]")
+  startupExperience     Boolean  @default(false)
+  technicalDomain       String
+  geography             String
+  originalSourcingScore Float
+  createdAt             DateTime @default(now())
+
+  interviews  InterviewOutcome[]
+  hire        HireOutcome?
+  performance PerformanceRecord?
+  rankings    LearnedRanking[]
+}
+
+model InterviewOutcome {
+  id            String    @id @default(cuid())
+  candidateId   String
+  candidate     Candidate @relation(fields: [candidateId], references: [id])
+  stage         String
+  outcome       String // PASSED | FAILED | WITHDRAWN
+  notes         String?
+  interviewedAt DateTime
+
+  @@index([candidateId])
+}
+
+model HireOutcome {
+  id              String    @id @default(cuid())
+  candidateId     String    @unique
+  candidate       Candidate @relation(fields: [candidateId], references: [id])
+  hired           Boolean
+  hireDate        DateTime?
+  rejectionReason String?
+}
+
+model PerformanceRecord {
+  id                      String    @id @default(cuid())
+  candidateId             String    @unique
+  candidate               Candidate @relation(fields: [candidateId], references: [id])
+  retentionMonths         Float?
+  managerRating           Float? // 1..5
+  promotionVelocityMonths Float?
+  customMetricsJson       String    @default("{}")
+  recordedAt              DateTime  @default(now())
+}
+
+model SourcingInsight {
+  id              String   @id @default(cuid())
+  generatedAt     DateTime @default(now())
+  kind            String // InsightKind: CORRELATION | RECOMMENDATION
+  factor          String
+  title           String
+  description     String
+  sampleSize      Int
+  confidence      String // ConfidenceLevel: LOW | MEDIUM | HIGH
+  correlation     Float?
+  confoundersJson String   @default("[]")
+  runId           String?
+}
+
+model SourcingWeightProposal {
+  id          String    @id @default(cuid())
+  generatedAt DateTime  @default(now())
+  factor      String
+  oldWeight   Float
+  newWeight   Float
+  rationale   String
+  status      String    @default("PENDING") // ApprovalStatus
+  decidedAt   DateTime?
+}
+
+model LearnedRanking {
+  id          String    @id @default(cuid())
+  candidateId String
+  candidate   Candidate @relation(fields: [candidateId], references: [id])
+  oldRank     Int
+  newRank     Int
+  oldScore    Float
+  newScore    Float
+  reasonJson  String    @default("[]")
+  generatedAt DateTime  @default(now())
+
+  @@index([candidateId])
+}
+
+// ─────────────────────────────────────────────────────────────
+// PRODUCT 2 — COMPANY SCOUT
+// ─────────────────────────────────────────────────────────────
+
+model Prospect {
+  id                    String   @id @default(cuid())
+  companyName           String
+  dedupeKey             String   @unique
+  country               String
+  vertical              String
+  website               String?
+  employeeCountEstimate String?
+  opportunityScore      Float    @default(0)
+  scoreBreakdownJson    String   @default("[]")
+  useCase               String?
+  useCaseRationale      String?
+  status                String   @default("NEW") // ProspectStatus
+  whyJson               String   @default("[]") // "why this prospect" bullet list
+  firstDiscoveredAt     DateTime @default(now())
+  lastUpdatedAt         DateTime @updatedAt
+  runId                 String?
+
+  decisionMakers DecisionMaker[]
+  outreach       OutreachMessage[]
+  scoreHistory   ScoreHistory[]
+
+  @@index([country, vertical])
+}
+
+model ScoreHistory {
+  id            String   @id @default(cuid())
+  prospectId    String
+  prospect      Prospect @relation(fields: [prospectId], references: [id])
+  score         Float
+  breakdownJson String   @default("[]")
+  recordedAt    DateTime @default(now())
+
+  @@index([prospectId])
+}
+
+model DecisionMaker {
+  id          String   @id @default(cuid())
+  prospectId  String
+  prospect    Prospect @relation(fields: [prospectId], references: [id])
+  name        String
+  title       String
+  linkedinUrl String?
+  confidence  Float
+
+  @@index([prospectId])
+}
+
+model OutreachMessage {
+  id         String    @id @default(cuid())
+  prospectId String
+  prospect   Prospect  @relation(fields: [prospectId], references: [id])
+  channel    String // OutreachChannel: EMAIL | LINKEDIN
+  subject    String?
+  body       String
+  angle      String
+  status     String    @default("DRAFT") // OutreachStatus
+  createdAt  DateTime  @default(now())
+  approvedAt DateTime?
+  sentAt     DateTime?
+
+  @@index([prospectId])
+}
+
+// ─────────────────────────────────────────────────────────────
+// PRODUCT 3 — EXTERNAL INTELLIGENCE RADAR
+// ─────────────────────────────────────────────────────────────
+
+model Company {
+  id        String   @id @default(cuid())
+  name      String   @unique
+  isDefault Boolean  @default(false)
+  createdAt DateTime @default(now())
+
+  mentions Mention[]
+  themes   Theme[]
+  alerts   Alert[]
+}
+
+model Mention {
+  id           String   @id @default(cuid())
+  companyId    String
+  company      Company  @relation(fields: [companyId], references: [id])
+  themeId      String?
+  theme        Theme?   @relation(fields: [themeId], references: [id])
+  text         String
+  sourceName   String
+  sourceUrl    String
+  sourceDate   DateTime
+  audienceLens String // AudienceLens: CANDIDATE | CUSTOMER | EXECUTIVE | INVESTOR
+  sentiment    String // Sentiment: POSITIVE | NEGATIVE | NEUTRAL
+  category     String
+  isDemo       Boolean  @default(true)
+
+  @@index([companyId])
+  @@index([themeId])
+}
+
+model Theme {
+  id          String   @id @default(cuid())
+  companyId   String
+  company     Company  @relation(fields: [companyId], references: [id])
+  label       String
+  category    String
+  firstSeenAt DateTime
+  lastSeenAt  DateTime
+
+  mentions Mention[]
+  trend    TrendPoint[]
+  alerts   Alert[]
+
+  @@index([companyId])
+}
+
+model TrendPoint {
+  id           String   @id @default(cuid())
+  themeId      String
+  theme        Theme    @relation(fields: [themeId], references: [id])
+  weekStart    DateTime
+  mentionCount Int
+
+  @@index([themeId])
+}
+
+model Alert {
+  id                String   @id @default(cuid())
+  companyId         String
+  company           Company  @relation(fields: [companyId], references: [id])
+  themeId           String?
+  theme             Theme?   @relation(fields: [themeId], references: [id])
+  title             String
+  type              String // AlertType: RISK | OPPORTUNITY
+  severity          String // Severity: LOW | MEDIUM | HIGH
+  confidence        String // ConfidenceLevel: LOW | MEDIUM | HIGH
+  evidenceCount     Int
+  baseline          String
+  trend             String
+  aiExplanation     String
+  recommendedAction String
+  status            String   @default("OPEN") // AlertStatus
+  createdAt         DateTime @default(now())
+
+  @@index([companyId])
+}

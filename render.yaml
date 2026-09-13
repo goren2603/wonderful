@@ -1,0 +1,16 @@
+services:
+  - type: web
+    name: wonderful-intelligence
+    env: docker
+    plan: free
+    dockerfilePath: ./Dockerfile
+    envVars:
+      - key: DATABASE_URL
+        value: file:./prisma/dev.db
+      - key: NODE_ENV
+        value: production
+      # Optional — leave unset to run in demo mode (see README).
+      - key: ANTHROPIC_API_KEY
+        sync: false
+      - key: CRON_SECRET
+        generateValue: true

@@ -54,3 +54,18 @@ env/
 .parcel-cache/
 .turbo/
 .DS_Store
+
+# --- Next.js ---
+.next/
+next-env.d.ts
+*.tsbuildinfo
+
+# --- Prisma / local DB ---
+prisma/dev.db
+prisma/dev.db-journal
+*.db
+*.db-journal
+
+# --- Env files (keep .env.example tracked) ---
+.env
+.env.local
