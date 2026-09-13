@@ -2,7 +2,7 @@ import { db } from '@/lib/db';
 import { RADAR_THEMES } from '@/lib/seedData/radar';
 import { withAgentLease } from '@/lib/agentRuntime';
 import { classifyTheme, analyzeTheme, weekStart } from '@/lib/radarAnalysis';
-import { fetchLiveEvidence } from '@/lib/research';
+import { fetchLiveEvidenceDetailed } from '@/lib/research';
 import { sendEmail } from '@/lib/email';
 import type { AgentStep } from '@/lib/types';
 
@@ -34,8 +34,8 @@ export async function seedRadarData(companyName='Wonderful') {
 // bug.
 export const WONDERFUL_SEARCH_TERM = 'wonderful.ai';
 
-async function ingestLiveCompanyMentions(companyId:string,searchTerm:string):Promise<{fetched:number;stored:number}> {
-  const items=await fetchLiveEvidence(searchTerm);
+async function ingestLiveCompanyMentions(companyId:string,searchTerm:string):Promise<{fetched:number;stored:number;sourceErrors:string[]}> {
+  const {items,sourceErrors}=await fetchLiveEvidenceDetailed(searchTerm);
   let stored=0;
   for(const item of items) {
     const text=`Real, live public mention (${item.sourceName}): "${item.title}" — ${item.snippet.slice(0,300)}`;
@@ -50,7 +50,7 @@ async function ingestLiveCompanyMentions(companyId:string,searchTerm:string):Pro
     // real search for "who leads this company."
     if(!exists) {await db.mention.create({data:{companyId,text,sourceName:item.sourceName,sourceUrl:item.sourceUrl,sourceDate:item.sourceDate,audienceLens:'INVESTOR',sentiment:'NEUTRAL',category:'Market signal',isDemo:item.isDemo}});stored++;}
   }
-  return {fetched:items.length,stored};
+  return {fetched:items.length,stored,sourceErrors};
 }
 
 // Emails every self-serve subscriber once, the first time a theme's current
@@ -83,7 +83,7 @@ export async function runRadarScan(companyName?:string) {
   return withAgentLease('EXTERNAL_RADAR',async()=>{
     const run=await db.agentRun.create({data:{agent:'EXTERNAL_RADAR',goal:`Recompute monitored signals for ${companyName??'all tracked companies'}`}});
     const steps:AgentStep[]=[];
-    let sourcesChecked=0,actionsCreated=0,entitiesFound=0,liveFetched=0,liveStored=0;
+    let sourcesChecked=0,actionsCreated=0,entitiesFound=0,liveFetched=0,liveStored=0,sourceErrorCount=0;
     try {
       const companies=await db.company.findMany({where:companyName?{name:companyName}:undefined});
       if(companyName&&!companies.length) throw new Error('Company not found');
@@ -93,7 +93,8 @@ export async function runRadarScan(companyName?:string) {
         const searchTerm=company.isDefault?WONDERFUL_SEARCH_TERM:company.name;
         const liveIngest=await ingestLiveCompanyMentions(company.id,searchTerm);
         liveFetched+=liveIngest.fetched;liveStored+=liveIngest.stored;
-        steps.push({label:'Fetching live source',detail:`Wikipedia + Hacker News for "${searchTerm}": ${liveIngest.fetched} real items fetched, ${liveIngest.stored} new mentions stored.`,at:new Date().toISOString()});
+        if(liveIngest.sourceErrors.length) {sourceErrorCount++;steps.push({label:'Source error',detail:`${company.name}: ${liveIngest.sourceErrors.join('; ')} — treat this run's "no new evidence" as inconclusive, not a confirmed negative.`,at:new Date().toISOString()});}
+        else steps.push({label:'Fetching live source',detail:`Wikipedia + Hacker News for "${searchTerm}": ${liveIngest.fetched} real items fetched, ${liveIngest.stored} new mentions stored.`,at:new Date().toISOString()});
         await db.agentRun.update({where:{id:run.id},data:{stepsJson:JSON.stringify(steps)}});
         const mentions=await db.mention.findMany({where:{companyId:company.id}});
         sourcesChecked+=mentions.length;
@@ -136,8 +137,9 @@ export async function runRadarScan(companyName?:string) {
         },{timeout:30000});
         for(const c of spikeCandidates) await maybeSendSpikeEmail(c.themeId,c.label,company.name,c.members);
       }
-      const summary=`Reanalyzed ${sourcesChecked} stored mentions across ${companies.length} companies; ${entitiesFound} new alerts, ${actionsCreated} qualifying alerts refreshed.${liveFetched>0?` Live source this run: ${liveFetched} Hacker News posts fetched, ${liveStored} new.`:' 0 web pages fetched this run.'}`;
+      const summary=`Reanalyzed ${sourcesChecked} stored mentions across ${companies.length} companies; ${entitiesFound} new alerts, ${actionsCreated} qualifying alerts refreshed. ${liveFetched} real live item(s) fetched this run.${sourceErrorCount?` ${sourceErrorCount} company/companies had a live-source error — see run steps.`:''}`;
       const warnings=[`Every tracked company — including "Wonderful" (searched as ${WONDERFUL_SEARCH_TERM}) — is checked against real, live, keyless public sources (Wikipedia, Hacker News search) every scan; "Wonderful" also keeps its original seeded scenario mentions alongside whatever real results come back, each individually flagged isDemo. A small/newer real company can honestly surface little or nothing live — that's a real result, not a bug. Keyword clustering and source-count confidence are heuristics either way.`];
+      if(sourceErrorCount) warnings.push(`${sourceErrorCount} company/companies had a live-source fetch error this run (network/timeout) — their "no new evidence" is inconclusive, not a confirmed negative. See run steps for which.`);
       await db.agentRun.update({where:{id:run.id},data:{status:'SUCCEEDED',endedAt:new Date(),durationMs:Date.now()-run.startedAt.getTime(),sourcesChecked,entitiesFound,entitiesAccepted:entitiesFound,actionsCreated,summary,warningsJson:JSON.stringify(warnings),stepsJson:JSON.stringify(steps)}});
       return {runId:run.id,entitiesFound,summary};
     } catch(err) {await db.agentRun.update({where:{id:run.id},data:{status:'FAILED',endedAt:new Date(),errorMessage:err instanceof Error?err.message:String(err),stepsJson:JSON.stringify(steps)}});throw err;}

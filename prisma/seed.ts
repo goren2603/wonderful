@@ -1,7 +1,7 @@
 import { db } from "../src/lib/db";
 import { generateSeedCandidates, generateNewBatch } from "../src/lib/seedData/candidates";
 import { runTalentAnalysis } from "../src/lib/agents/talentAgent";
-import { runCompanyScoutScan } from "../src/lib/agents/scoutAgent";
+import { runLiveGrowthDiscovery } from "../src/lib/agents/scoutAgent";
 import { seedRadarData, runRadarScan } from "../src/lib/agents/radarAgent";
 import { COUNTRIES, VERTICALS } from "../src/lib/seedData/prospects";
 import { DEFAULT_JOBS } from "../src/lib/scheduler";
@@ -124,58 +124,16 @@ async function seedTalent() {
   console.log("Ran initial sourcing model audit.");
 }
 
+// The default, real state: runs live discovery (real evidence + real
+// Wikidata-verified executive lookup) so the dashboard already shows
+// completed real work on first load, instead of an empty pipeline. Nothing
+// past "outreach drafted, awaiting approval" is pre-populated — no seeded
+// sends, replies, or meetings. Those only happen when a real human (you, or
+// whoever opens the link) actually clicks approve/send/reply, so every
+// number past that point is something that genuinely occurred.
 async function seedScout() {
-  await runCompanyScoutScan({ countries: COUNTRIES, verticals: VERTICALS, limit: 32 });
-  console.log("Ran initial Growth Agent scan.");
-  await seedGrowthAgentProgress();
-  console.log("Advanced a few demo accounts through the real pipeline (approve/send/reply/meeting).");
-}
-
-// Moves a handful of the DEMO directory's accounts through the real
-// approve -> send -> reply -> meeting-booked state machine (the exact same
-// transitions the UI buttons trigger), so the pipeline doesn't look
-// completely empty right after a fresh seed. This is authored SEED state on
-// already-synthetic demo companies (same category as Sourcing Optimizer's
-// synthetic historical hire outcomes) - not a claim that any of this really
-// happened, and it never touches a real target you add yourself.
-async function seedGrowthAgentProgress() {
-  const prospects = await db.prospect.findMany({ orderBy: { opportunityScore: "desc" }, include: { outreach: true }, take: 6 });
-  const advance = async (prospectId: string, target: "CONTACTED" | "REPLIED" | "MEETING_BOOKED", replyNote?: string) => {
-    const email = await db.outreachMessage.findFirst({ where: { prospectId, channel: "EMAIL" } });
-    if (!email) return;
-    const approval = await db.approvalItem.findFirst({ where: { entityId: email.id, status: "PENDING" } });
-    if (approval) {
-      await db.outreachMessage.update({ where: { id: email.id }, data: { status: "APPROVED", approvedAt: new Date() } });
-      await db.prospect.updateMany({ where: { id: prospectId, status: { in: ["NEW", "SCORED", "RESEARCHED"] } }, data: { status: "OUTREACH_READY" } });
-      await db.approvalItem.update({ where: { id: approval.id }, data: { status: "APPROVED", decidedAt: new Date() } });
-      await db.auditLogEntry.create({ data: { actor: "human", action: "approval_approved", entityType: "OUTREACH_EMAIL", entityId: email.id, detailJson: JSON.stringify({ approvalId: approval.id, seeded: true }) } });
-    }
-    if (target === "CONTACTED" || target === "REPLIED" || target === "MEETING_BOOKED") {
-      await db.outreachMessage.update({ where: { id: email.id }, data: { status: "SENT", sentAt: new Date() } });
-      await db.prospect.updateMany({ where: { id: prospectId, status: { not: "REPLIED" } }, data: { status: "CONTACTED" } });
-      await db.auditLogEntry.create({ data: { actor: "human", action: "outreach_sent", entityType: "OutreachMessage", entityId: email.id, detailJson: JSON.stringify({ manualConfirmed: true, delivery: "external/manual", seeded: true }) } });
-    }
-    if (target === "REPLIED" || target === "MEETING_BOOKED") {
-      await db.outreachMessage.update({ where: { id: email.id }, data: { status: "REPLIED", replyNote: replyNote ?? null } });
-      await db.prospect.update({ where: { id: prospectId }, data: { status: "REPLIED" } });
-      await db.auditLogEntry.create({ data: { actor: "human", action: "outreach_replied", entityType: "OutreachMessage", entityId: email.id, detailJson: JSON.stringify({ seeded: true }) } });
-    }
-    if (target === "MEETING_BOOKED") {
-      await db.prospect.update({ where: { id: prospectId }, data: { status: "MEETING_BOOKED" } });
-      await db.auditLogEntry.create({ data: { actor: "human", action: "meeting_booked", entityType: "Prospect", entityId: prospectId, detailJson: "{}" } });
-    }
-  };
-  if (prospects[0]) await advance(prospects[0].id, "MEETING_BOOKED", "Sounds relevant — let's find 30 minutes next week to compare notes.");
-  if (prospects[1]) await advance(prospects[1].id, "REPLIED", "Interesting timing, we're actually reviewing this area now. Send more detail?");
-  if (prospects[2]) await advance(prospects[2].id, "CONTACTED");
-  if (prospects[3]) {
-    const linkedin = await db.outreachMessage.findFirst({ where: { prospectId: prospects[3].id, channel: "LINKEDIN" } });
-    if (linkedin) {
-      await db.outreachMessage.update({ where: { id: linkedin.id }, data: { status: "SENT", sentAt: new Date() } });
-      await db.prospect.updateMany({ where: { id: prospects[3].id, status: { not: "REPLIED" } }, data: { status: "CONTACTED" } });
-      await db.auditLogEntry.create({ data: { actor: "human", action: "outreach_sent", entityType: "OutreachMessage", entityId: linkedin.id, detailJson: JSON.stringify({ manualConfirmed: true, delivery: "external/manual", seeded: true }) } });
-    }
-  }
+  const result = await runLiveGrowthDiscovery({ countries: COUNTRIES, verticals: VERTICALS, limit: 10 });
+  console.log(`Ran initial live Growth Agent discovery: ${result.entitiesAccepted} companies, ${result.verifiedContacts} verified contact(s) found.`);
 }
 
 async function seedRadar() {

@@ -2,6 +2,7 @@ import type { Metadata } from "next";
 import { Inter } from "next/font/google";
 import "./globals.css";
 import { AppNotice } from "@/components/layout/AppNotice";
+import { VersionFooter } from "@/components/layout/VersionFooter";
 
 const inter = Inter({ subsets: ["latin"], variable: "--font-inter" });
 
@@ -13,7 +14,7 @@ export const metadata: Metadata = {
 export default function RootLayout({ children }: { children: React.ReactNode }) {
   return (
     <html lang="en" className={inter.variable}>
-      <body className="font-sans antialiased"><AppNotice />{children}</body>
+      <body className="font-sans antialiased"><AppNotice />{children}<VersionFooter /></body>
     </html>
   );
 }

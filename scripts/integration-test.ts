@@ -37,11 +37,11 @@ async function main(){
   const after=await db.prospect.count();assert.ok(after>=before);
   await runCompanyScoutScan({countries:COUNTRIES,verticals:VERTICALS,limit:50});
   assert.equal(await db.prospect.count(),after);
-  const p=await db.prospect.findFirstOrThrow({include:{scoreHistory:{orderBy:{recordedAt:'desc'}}}});
+  const p=await db.prospect.findFirstOrThrow({where:{discoveryMode:'demo'},include:{scoreHistory:{orderBy:{recordedAt:'desc'}}}});
   assert.ok(p.scoreHistory.length>=2);assert.equal(p.scoreHistory[0].score,p.scoreHistory[1].score);
   assert.ok(JSON.parse(p.scoreHistory[0].breakdownJson).some((b:{evidenceIds:string[]})=>b.evidenceIds.length));
   check('Scout discovers entire filtered universe, deduplicates and deterministically refreshes score history');
-  const email=await db.outreachMessage.findFirstOrThrow({where:{channel:'EMAIL',status:'AWAITING_APPROVAL'}});
+  const email=await db.outreachMessage.findFirstOrThrow({where:{channel:'EMAIL',status:'AWAITING_APPROVAL',prospect:{discoveryMode:'demo'}}});
   assert.equal((await outreach(req({status:'APPROVED'}),{params:{id:email.id}})).status,409);
   const gate=await db.approvalItem.findFirstOrThrow({where:{entityId:email.id,status:'PENDING'}});
   assert.equal((await decide(req({decision:'APPROVED'}),{params:{id:gate.id}})).status,200);

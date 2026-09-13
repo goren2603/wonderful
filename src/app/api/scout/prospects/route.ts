@@ -8,8 +8,9 @@ export async function GET(req: Request) {
   const country = searchParams.get("country");
   const vertical = searchParams.get("vertical");
   const status = searchParams.get("status");
+  const includeDemo = searchParams.get("includeDemo") === "1";
 
-  const where: Record<string, unknown> = {};
+  const where: Record<string, unknown> = { discoveryMode: includeDemo ? undefined : { in: ["live", "manual"] } };
   if (country) where.country = country;
   if (vertical) where.vertical = vertical;
   if (status) where.status = status;

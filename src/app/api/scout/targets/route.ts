@@ -48,7 +48,7 @@ export async function POST(req: Request) {
   if (linkedinUrl && !/^https:\/\/(www\.)?linkedin\.com\//.test(linkedinUrl)) return NextResponse.json({ error: "linkedinUrl must be a linkedin.com URL" }, { status: 400 });
   if (email && !/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email)) return NextResponse.json({ error: "email is not valid" }, { status: 400 });
 
-  const dedupeKey = dedupeCompany(companyName, country);
+  const dedupeKey = `manual::${dedupeCompany(companyName, country)}`;
   const liveEvidence = await fetchLiveEvidence(companyName);
   try {
     const result = await db.$transaction(async (tx) => {
@@ -61,6 +61,7 @@ export async function POST(req: Request) {
           country,
           vertical,
           status: "NEW",
+          discoveryMode: "manual",
           whyJson: JSON.stringify([
             "Manually added as a real target — not from the demo discovery directory.",
             liveEvidence.length ? `${liveEvidence.length} real, live evidence item(s) fetched at intake (Wikipedia/Hacker News) — see Evidence below.` : "No live public evidence found for this name at intake (Wikipedia/Hacker News returned nothing).",

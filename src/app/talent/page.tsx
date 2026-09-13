@@ -120,6 +120,9 @@ function ValidationHero({ evaluation }: { evaluation: Evaluation | null }) {
           </div>
         </div>
         <p className="mt-4 text-xs text-black/40">High performer = {evaluation.highPerformerDefinition}.</p>
+        <p className="mt-2 text-xs text-black/40">
+          Read this as directional, not proof: at top {evaluation.kUsed} out of a {evaluation.holdoutSize}-candidate holdout, one differently-classified candidate shifts precision by roughly {(100 / evaluation.kUsed).toFixed(0)} points. A held-out test this small is a real, unbiased check — but not a claim of certainty.
+        </p>
       </div>
     </Card>
   );

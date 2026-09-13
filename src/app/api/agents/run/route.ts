@@ -3,7 +3,7 @@ import { triggerAgentRun } from "@/lib/scheduler";
 import { COUNTRIES, VERTICALS } from "@/lib/seedData/prospects";
 import type { AgentKey } from "@/lib/types";
 import { AGENT_KEYS } from "@/lib/types";
-import { runCompanyScoutScan } from "@/lib/agents/scoutAgent";
+import { runLiveGrowthDiscovery } from "@/lib/agents/scoutAgent";
 
 // Vercel Cron (or any external scheduler) hits this with GET and, when
 // CRON_SECRET is set, an `Authorization: Bearer <CRON_SECRET>` header —
@@ -36,7 +36,7 @@ export async function POST(req: Request) {
 
   try {
     if (agentKey === "COMPANY_SCOUT" && (body.countries || body.verticals)) {
-      const result = await runCompanyScoutScan({
+      const result = await runLiveGrowthDiscovery({
         countries: body.countries?.length ? body.countries : COUNTRIES,
         verticals: body.verticals?.length ? body.verticals : VERTICALS,
         limit: body.limit ?? 8,

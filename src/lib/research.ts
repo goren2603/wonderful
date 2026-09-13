@@ -65,37 +65,44 @@ export function getResearchProvider(): ResearchProvider {
   return new DemoResearchProvider();
 }
 
-async function fetchWithTimeout(url: string, ms: number): Promise<Response | null> {
+// Distinguishes "the server actually responded and had nothing" from "we
+// couldn't even reach it" — a timeout/network error must never be reported
+// the same way as a confirmed empty result (see fetchLiveEvidenceDetailed).
+async function fetchWithTimeout(url: string, ms: number): Promise<{ res: Response | null; error: string | null }> {
   try {
     const res = await fetch(url, { signal: AbortSignal.timeout(ms), headers: { "User-Agent": "wonderful-intelligence-demo/1.0 (research prototype)" } });
-    return res.ok ? res : null;
-  } catch {
-    return null;
+    if (!res.ok) return { res: null, error: `HTTP ${res.status}` };
+    return { res, error: null };
+  } catch (err) {
+    return { res: null, error: err instanceof Error ? err.message : String(err) };
   }
 }
 
-async function fetchWikipediaSummary(companyName: string): Promise<EvidenceItem | null> {
+async function fetchWikipediaSummary(companyName: string): Promise<{ item: EvidenceItem | null; error: string | null }> {
   const title = companyName.replace(/\s*\([^)]*\)\s*/g, "").trim();
-  const res = await fetchWithTimeout(`https://en.wikipedia.org/api/rest_v1/page/summary/${encodeURIComponent(title)}`, 8000);
-  if (!res) return null;
+  const { res, error } = await fetchWithTimeout(`https://en.wikipedia.org/api/rest_v1/page/summary/${encodeURIComponent(title)}`, 8000);
+  if (!res) return { item: null, error };
   const data = await res.json().catch(() => null);
   const pageUrl = data?.content_urls?.desktop?.page;
-  if (!data || data.type === "disambiguation" || !data.extract || !pageUrl) return null;
+  if (!data || data.type === "disambiguation" || !data.extract || !pageUrl) return { item: null, error: null };
   return {
-    sourceUrl: pageUrl,
-    sourceName: "Wikipedia",
-    sourceDate: new Date(),
-    title: data.title ?? companyName,
-    snippet: String(data.extract).slice(0, 500),
-    confidence: 0.55,
-    isDemo: false,
+    item: {
+      sourceUrl: pageUrl,
+      sourceName: "Wikipedia",
+      sourceDate: new Date(),
+      title: data.title ?? companyName,
+      snippet: String(data.extract).slice(0, 500),
+      confidence: 0.55,
+      isDemo: false,
+    },
+    error: null,
   };
 }
 
-async function fetchHackerNewsMentions(companyName: string): Promise<EvidenceItem[]> {
-  if (companyName.replace(/[^A-Za-z0-9]/g, "").length <= 4) return []; // short/acronym names collide with unrelated real results too often
-  const res = await fetchWithTimeout(`https://hn.algolia.com/api/v1/search?query=${encodeURIComponent(companyName)}&tags=story&hitsPerPage=3`, 8000);
-  if (!res) return [];
+async function fetchHackerNewsMentions(companyName: string): Promise<{ items: EvidenceItem[]; error: string | null }> {
+  if (companyName.replace(/[^A-Za-z0-9]/g, "").length <= 4) return { items: [], error: null }; // short/acronym names collide with unrelated real results too often
+  const { res, error } = await fetchWithTimeout(`https://hn.algolia.com/api/v1/search?query=${encodeURIComponent(companyName)}&tags=story&hitsPerPage=3`, 8000);
+  if (!res) return { items: [], error };
   const data = await res.json().catch(() => null);
   const hits: unknown[] = Array.isArray(data?.hits) ? data.hits : [];
   const items: EvidenceItem[] = [];
@@ -113,7 +120,7 @@ async function fetchHackerNewsMentions(companyName: string): Promise<EvidenceIte
       isDemo: false,
     });
   }
-  return items;
+  return { items, error: null };
 }
 
 /**
@@ -124,8 +131,22 @@ async function fetchHackerNewsMentions(companyName: string): Promise<EvidenceIte
  * evidence found," not as an error.
  */
 export async function fetchLiveEvidence(companyName: string): Promise<EvidenceItem[]> {
+  const { items } = await fetchLiveEvidenceDetailed(companyName);
+  return items;
+}
+
+/**
+ * Same as fetchLiveEvidence, but also reports which source(s) genuinely
+ * failed to respond (timeout/network/HTTP error) — distinct from a source
+ * that answered and simply had nothing. A caller that needs to say "checked,
+ * found nothing" vs. "couldn't check" (the Growth Agent live discovery run
+ * does) should use this, not fetchLiveEvidence.
+ */
+export async function fetchLiveEvidenceDetailed(companyName: string): Promise<{ items: EvidenceItem[]; sourceErrors: string[] }> {
   const [wiki, hn] = await Promise.all([fetchWikipediaSummary(companyName), fetchHackerNewsMentions(companyName)]);
-  return [wiki, ...hn].filter((x): x is EvidenceItem => x !== null);
+  const items = [wiki.item, ...hn.items].filter((x): x is EvidenceItem => x !== null);
+  const sourceErrors = [wiki.error && `Wikipedia: ${wiki.error}`, hn.error && `Hacker News: ${hn.error}`].filter((x): x is string => Boolean(x));
+  return { items, sourceErrors };
 }
 
 // Capability status is about implemented behavior, never merely the presence of a key.

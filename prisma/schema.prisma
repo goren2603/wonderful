@@ -248,6 +248,7 @@ model Prospect {
   firstDiscoveredAt     DateTime @default(now())
   lastUpdatedAt         DateTime @updatedAt
   runId                 String?
+  discoveryMode         String   @default("demo") // "demo" (curated sample scenario) | "live" (real evidence + real verified-executive lookup) | "manual" (a real target you added)
 
   decisionMakers DecisionMaker[]
   outreach       OutreachMessage[]

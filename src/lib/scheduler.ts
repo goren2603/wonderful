@@ -1,7 +1,7 @@
 import { Cron } from 'croner';
 import { db } from '@/lib/db';
 import { runTalentAnalysis } from '@/lib/agents/talentAgent';
-import { runCompanyScoutScan } from '@/lib/agents/scoutAgent';
+import { runLiveGrowthDiscovery } from '@/lib/agents/scoutAgent';
 import { runRadarScan } from '@/lib/agents/radarAgent';
 import { COUNTRIES, VERTICALS } from '@/lib/seedData/prospects';
 import { AGENT_KEYS, type AgentKey } from '@/lib/types';
@@ -13,7 +13,7 @@ export const DEFAULT_JOBS:{agentKey:AgentKey;label:string;cronExpr:string}[]=[
 export async function triggerAgentRun(agentKey:AgentKey) {
   if(!AGENT_KEYS.includes(agentKey)) throw new Error('Invalid agentKey');
   if(agentKey==='TALENT_INTELLIGENCE') return runTalentAnalysis();
-  if(agentKey==='COMPANY_SCOUT') return runCompanyScoutScan({countries:COUNTRIES,verticals:VERTICALS,limit:8});
+  if(agentKey==='COMPANY_SCOUT') return runLiveGrowthDiscovery({countries:COUNTRIES,verticals:VERTICALS,limit:8});
   return runRadarScan();
 }
 const state=globalThis as unknown as {schedulerStarting?:Promise<void>;schedulerTimer?:ReturnType<typeof setInterval>};

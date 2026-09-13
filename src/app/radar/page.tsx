@@ -236,7 +236,7 @@ export default function RadarPage() {
         </>
       ) : (
         <>
-          <SectionHeading eyebrow={activeCompany} title="What changed since yesterday" detail="Every signal below answers: what changed, why it matters, what the evidence is, and what to do." />
+          <SectionHeading eyebrow={activeCompany} title="What changed this week" detail="Every signal below answers: what changed, why it matters, what the evidence is, and what to do. Computed weekly, not daily — see each card for the exact window." />
           <div className="mb-3 flex gap-3 text-xs text-black/45">
             <span>{alertsByType.RISK} risk</span>
             <span>{alertsByType.OPPORTUNITY} opportunity</span>

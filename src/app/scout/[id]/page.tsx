@@ -52,6 +52,7 @@ interface Prospect {
   useCaseRationale: string | null;
   status: string;
   whyJson: string;
+  discoveryMode: "demo" | "live" | "manual";
   decisionMakers: DecisionMaker[];
   outreach: OutreachMessage[];
   scoreHistory: { score: number; recordedAt: string }[];
@@ -218,7 +219,10 @@ export default function ProspectDetailPage() {
 
       <div className="mb-6 flex flex-wrap items-start justify-between gap-4">
         <div>
-          <h1 className="text-2xl font-semibold text-black/90">{prospect.companyName}</h1>
+          <div className="mb-1 flex items-center gap-2">
+            <h1 className="text-2xl font-semibold text-black/90">{prospect.companyName}</h1>
+            {prospect.discoveryMode === "demo" ? <DemoBadge /> : prospect.discoveryMode === "manual" ? <Badge tone="positive">Real target you added</Badge> : <LiveBadge />}
+          </div>
           <p className="text-sm text-black/50">
             {prospect.country} · {prospect.vertical} · {prospect.employeeCountEstimate} employees
             {prospect.website && (
@@ -349,6 +353,9 @@ export default function ProspectDetailPage() {
               {prospect.outreach.map((m) => (
                 <OutreachCard key={m.id} message={m} onChanged={load} />
               ))}
+              {prospect.outreach.length === 0 && (
+                <EmptyState title="No verified contact found" detail="Checked Wikidata for a real CEO/director claim for this company — none exists there, so no name was guessed and no outreach draft was created. If you know a real contact here, add them as a real target from the Growth Agent page." />
+              )}
             </div>
           )}
         </div>

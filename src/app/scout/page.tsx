@@ -186,6 +186,23 @@ export default function ScoutPage() {
     setArr(arr.includes(val) ? arr.filter((v) => v !== val) : [...arr, val]);
   };
 
+  const [liveScanning, setLiveScanning] = useState(false);
+  const [liveScanResult, setLiveScanResult] = useState<string | null>(null);
+
+  const runLiveDiscovery = async () => {
+    setLiveScanning(true);
+    try {
+      setLiveScanResult(null);
+      const res = await fetch("/api/agents/run", { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ agentKey: "COMPANY_SCOUT" }) });
+      const data = await res.json();
+      setLiveScanResult(res.ok ? data.result.summary : data.error);
+      loadProspects();
+      loadSummary();
+    } finally {
+      setLiveScanning(false);
+    }
+  };
+
   const runScan = async () => {
     setScanning(true);
     try {
@@ -200,7 +217,7 @@ export default function ScoutPage() {
       const run = await fetch(`/api/agents/runs/${data.result.runId}`).then((r) => r.json());
       const steps: { label: string }[] = JSON.parse(run.run.stepsJson);
       setVisibleSteps([...new Set(steps.map((s) => s.label))]);
-      setScanResult(`Found ${data.result.entitiesFound} companies, added ${data.result.entitiesAccepted} new prospects, refreshed ${data.result.refreshed ?? 0}.`);
+      setScanResult(`Sample scenario: found ${data.result.entitiesFound} companies, added ${data.result.entitiesAccepted}, refreshed ${data.result.refreshed ?? 0}. Illustrative only — excluded from the real stats above.`);
       loadProspects();
       loadSummary();
     } finally {
@@ -225,11 +242,16 @@ export default function ScoutPage() {
       ) : (
         <>
           <TodayStats summary={summary} />
+          <div className="mb-8 flex items-center gap-3">
+            <Button accent="scout" onClick={runLiveDiscovery} disabled={liveScanning}>{liveScanning ? "Running live discovery…" : "Run live discovery now"}</Button>
+            <p className="text-xs text-black/45">Real evidence (Wikipedia, Hacker News) + a real, Wikidata-verified executive contact per company. Also runs automatically on schedule.</p>
+          </div>
+          {liveScanResult && <p className="-mt-6 mb-6 text-sm text-black/60">{liveScanResult}</p>}
           <Pipeline prospects={prospects} />
           <AddRealTarget onAdded={() => { loadProspects(); loadSummary(); }} />
 
-          <details className="mb-8 rounded-xl2 border border-black/5 bg-white shadow-card">
-            <summary className="cursor-pointer select-none p-5 text-sm font-medium text-black/70">Run a new market scan (the agent also runs on its own schedule)</summary>
+          <details className="mb-8 rounded-xl2 border border-dashed border-black/15 bg-white shadow-card">
+            <summary className="cursor-pointer select-none p-5 text-sm font-medium text-black/70">Load sample scenario (illustrative only — never counted in the stats above)</summary>
             <div className="border-t border-black/5 p-5">
               <div className="mb-4 grid grid-cols-1 gap-4 sm:grid-cols-2">
                 <div>
@@ -249,7 +271,7 @@ export default function ScoutPage() {
                   </div>
                 </div>
               </div>
-              <Button accent="scout" onClick={runScan} disabled={scanning || countries.length === 0 || verticals.length === 0}>{scanning ? "Scanning…" : "Run a new market scan"}</Button>
+              <Button accent="scout" onClick={runScan} disabled={scanning || countries.length === 0 || verticals.length === 0}>{scanning ? "Loading…" : "Load sample scenario"}</Button>
               {(scanning || visibleSteps.length > 0) && <div className="mt-4"><ScanProgress steps={visibleSteps} /></div>}
               {scanResult && <p className="mt-3 text-sm text-black/60">{scanResult}</p>}
             </div>
@@ -261,7 +283,7 @@ export default function ScoutPage() {
             </div>
             <div className="px-5 pb-5">
               {prospects.length === 0 ? (
-                <EmptyState title="No prospects yet" detail="Run a market scan or add a real target above." />
+                <EmptyState title="No real accounts yet" detail="Click 'Run live discovery now' above, add a real target, or wait for the next scheduled run." />
               ) : (
                 <div className="grid grid-cols-1 gap-3 md:grid-cols-2 xl:grid-cols-3">
                   {prospects.map((p) => {
