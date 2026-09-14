@@ -126,6 +126,7 @@ function SubscribeBar() {
 export default function RadarPage() {
   const [companies, setCompanies] = useState<Company[]>([]);
   const [activeCompany, setActiveCompany] = useState("Wonderful");
+  const [view, setView] = useState<"company" | "leadership">("company");
   const [lens, setLens] = useState<(typeof LENSES)[number]>("ALL");
   const [overview, setOverview] = useState<Overview | null>(null);
   const [scanning, setScanning] = useState(false);
@@ -196,6 +197,12 @@ export default function RadarPage() {
         accentBg="bg-radar-soft"
       />
 
+      <div className="mb-6 flex gap-2" role="group" aria-label="Radar view">
+        <button type="button" aria-pressed={view === "company"} onClick={() => setView("company")} className={`rounded-full px-4 py-2 text-sm font-medium ${view === "company" ? "bg-radar text-white" : "bg-black/5 text-black/60"}`}>Company signals</button>
+        <button type="button" aria-pressed={view === "leadership"} onClick={() => { setView("leadership"); setActiveCompany("Wonderful"); }} className={`rounded-full px-4 py-2 text-sm font-medium ${view === "leadership" ? "bg-radar text-white" : "bg-black/5 text-black/60"}`}>Leadership news</button>
+      </div>
+
+      {view === "company" && <>
       <div className="mb-4 flex justify-end">
         <SubscribeBar />
       </div>
@@ -224,7 +231,10 @@ export default function RadarPage() {
         </div>
       </div>
 
-      {overview?.leadership && (
+      </>}
+
+      {view === "leadership" && !overview?.leadership && <Skeleton className="mb-8 h-64 w-full" />}
+      {view === "leadership" && overview?.leadership && (
         <Card className="mb-8 border border-radar/20">
           <SectionHeading eyebrow="Named leadership · live public news" title="Wonderful leadership in the news" detail="News search results for our watched leaders and Wonderful. Checked by the same scheduled Radar agent; no CRM or private access needed." />
           <div className="mb-3 flex flex-wrap gap-2">
@@ -241,13 +251,13 @@ export default function RadarPage() {
             </article>)}
           </div>
           {!overview.leadership.articles.length && overview.leadership.lastScan && <p className="text-sm text-black/60">No matching articles stored yet. We do not substitute sample stories.</p>}
-          <p className="mt-3 text-xs text-black/50">A new article is a change in coverage, not automatically a risk or endorsement. This section is independent of the audience lens below.</p>
+          <p className="mt-3 text-xs text-black/50">A new article is a change in coverage, not automatically a risk or endorsement. Audience filters apply to Company signals only.</p>
           <Button variant="secondary" onClick={runScan} disabled={scanning}>{scanning ? 'Checking public sources…' : 'Check public sources now'}</Button>
           {scanMsg && <p role="status" className="mt-2 text-xs">{scanMsg}</p>}
         </Card>
       )}
 
-      {!overview ? (
+      {view === "company" && (!overview ? (
         <div className="space-y-4">
           <Skeleton className="h-40 w-full" />
           <Skeleton className="h-64 w-full" />
@@ -329,7 +339,7 @@ export default function RadarPage() {
             </div>
           </details>
         </>
-      )}
+      ))}
       <RunHistory agent="EXTERNAL_RADAR" />
     </main>
   );
