@@ -1,7 +1,7 @@
 import { NextResponse } from "next/server";
 import { db } from "@/lib/db";
 import { dedupeCompany } from "@/lib/scoutScoring";
-import { fetchLiveEvidence, type EvidenceItem } from "@/lib/research";
+import { fetchLiveEvidence, excludeSecurityIncidents, type EvidenceItem } from "@/lib/research";
 import { USE_CASE_BY_VERTICAL, type Vertical } from "@/lib/seedData/prospects";
 
 // Composes a draft that's actually ready to send when real evidence came
@@ -54,7 +54,7 @@ export async function POST(req: Request) {
   if (email && !/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email)) return NextResponse.json({ error: "email is not valid" }, { status: 400 });
 
   const dedupeKey = `manual::${dedupeCompany(companyName, country)}`;
-  const liveEvidence = await fetchLiveEvidence(companyName);
+  const liveEvidence = excludeSecurityIncidents(await fetchLiveEvidence(companyName)); // a sales lead's evidence panel shouldn't read as "we noticed you got hacked"
   try {
     const result = await db.$transaction(async (tx) => {
       const prospect = await tx.prospect.upsert({

@@ -149,6 +149,22 @@ export async function fetchLiveEvidenceDetailed(companyName: string): Promise<{ 
   return { items, sourceErrors };
 }
 
+const SECURITY_INCIDENT_PATTERN = /\b(breach(es|ed)?|ransomware|hack(ed|ing)?|exploit(ed)?|vulnerab\w*|\bRCE\b|CVE-\d|malware|data leak|leaked data|cyber ?attack|phishing|zero-day|security flaw)\b/i;
+
+/**
+ * Drops real, real-source evidence about a security incident (a breach, an
+ * RCE bug, ransomware, ...) — factually real and genuinely about the
+ * company, but tone-deaf as "why we're reaching out" context for a cold
+ * sales lead; nobody wants a vendor's evidence panel to read as "we noticed
+ * you got hacked." Used only for Growth Agent's evidence (targets + live
+ * discovery) — Radar's risk-monitoring path deliberately does NOT apply
+ * this filter, since a breach is exactly the kind of signal Radar exists to
+ * surface.
+ */
+export function excludeSecurityIncidents(items: EvidenceItem[]): EvidenceItem[] {
+  return items.filter((item) => !SECURITY_INCIDENT_PATTERN.test(item.title) && !SECURITY_INCIDENT_PATTERN.test(item.snippet));
+}
+
 // Capability status is about implemented behavior, never merely the presence of a key.
 export function researchStatus() {
   return {

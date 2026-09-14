@@ -1,5 +1,5 @@
 import { db } from '@/lib/db';
-import { getResearchProvider, fetchLiveEvidenceDetailed } from '@/lib/research';
+import { getResearchProvider, fetchLiveEvidenceDetailed, excludeSecurityIncidents } from '@/lib/research';
 import { findVerifiedExecutive } from '@/lib/wikidata';
 import { withAgentLease, retry } from '@/lib/agentRuntime';
 import { scoreCompany, scoreLiveCompany, dedupeCompany } from '@/lib/scoutScoring';
@@ -106,7 +106,8 @@ export async function runLiveGrowthDiscovery(params: LiveDiscoveryParams = {}) {
       const candidates = universe.sort((a, b) => (existingFor(a)?.lastUpdatedAt.getTime() ?? 0) - (existingFor(b)?.lastUpdatedAt.getTime() ?? 0) || a.name.localeCompare(b.name)).slice(0, limit);
       await step('Discovering', `${candidates.length} real companies selected from ${universe.length} in scope (least-recently-checked first — a real ongoing queue, not a one-shot list).`);
       for (const company of candidates) {
-        const { items, sourceErrors } = await fetchLiveEvidenceDetailed(company.name);
+        const { items: fetchedItems, sourceErrors } = await fetchLiveEvidenceDetailed(company.name);
+        const items = excludeSecurityIncidents(fetchedItems); // a sales lead's evidence panel shouldn't read as "we noticed you got hacked"
         sourcesChecked += items.length;
         if (sourceErrors.length) { sourceErrorCount++; await step('Source error', `${company.name}: ${sourceErrors.join('; ')} — treat "no evidence" below as inconclusive for this company, not a confirmed negative.`); }
         else await step('Researching', `${company.name}: ${items.length} real evidence item(s) found (Wikipedia, Hacker News).`);
