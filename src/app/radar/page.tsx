@@ -23,6 +23,7 @@ interface Theme {
   _count: { mentions: number };
 }
 interface Alert {
+  isDemo: boolean;
   id: string;
   title: string;
   type: "RISK" | "OPPORTUNITY" | "PRODUCT_SIGNAL";
@@ -48,6 +49,11 @@ interface Mention {
   isDemo: boolean;
 }
 interface Overview {
+  leadership: null | {
+    people: { name: string; role: string }[]; sourceUrl: string; verifiedAt: string;
+    articles: { id: string; title: string; sourceUrl: string; sourceName: string; sourceDate: string; fetchedAt: string; people: string[]; nameInMetadata: boolean }[];
+    lastScan: null | { at: string; stored: number; fetched: number; errors: string[] };
+  };
   company: Company;
   themes: Theme[];
   alerts: Alert[];
@@ -73,6 +79,7 @@ function SignalCard({ alert, lens }: { alert: Alert; lens: string }) {
         <span className={`text-xs font-bold uppercase tracking-wide ${style.text}`}>{style.label}</span>
         <Badge tone={alert.state === "WORSENING" ? "negative" : alert.state === "IMPROVING" ? "positive" : "neutral"}>{alert.state.toLowerCase()}</Badge>
       </div>
+      {alert.isDemo && <DemoBadge />}
       <p className="text-sm font-semibold text-black/85">{alert.title.replace(/^(Risk|Opportunity|Signal): /, "")}</p>
       <p className="text-sm font-medium text-black/70">{alert.lastWeekCount} this week{alert.executiveCount > 0 ? ` · ${alert.executiveCount} from executives` : ""}</p>
       <p className="text-xs text-black/45">{alert.trend}</p>
@@ -102,7 +109,7 @@ function SubscribeBar() {
   if (status === "done") {
     return (
       <div className="flex items-center gap-2 rounded-full border border-emerald-300 bg-emerald-50 px-3 py-1 text-xs text-emerald-800">
-        <span>✓ {email} will get a real email when a theme crosses {5}+ negative mentions in a week</span>
+        <span>✓ Subscription saved. Delivery requires a configured email provider and {5}+ real negative mentions in a week.</span>
         <button onClick={unsubscribe} className="underline">Unsubscribe</button>
       </div>
     );
@@ -217,6 +224,29 @@ export default function RadarPage() {
         </div>
       </div>
 
+      {overview?.leadership && (
+        <Card className="mb-8 border border-radar/20">
+          <SectionHeading eyebrow="Named leadership · live public news" title="Wonderful leadership in the news" detail="News search results for our watched leaders and Wonderful. Checked by the same scheduled Radar agent; no CRM or private access needed." />
+          <div className="mb-3 flex flex-wrap gap-2">
+            {overview.leadership.people.map(p => <span key={p.name} className="rounded-full bg-radar-soft px-3 py-1 text-xs">{p.name} · {p.role}</span>)}
+          </div>
+          <p className="mb-3 text-xs text-black/50"><a href={overview.leadership.sourceUrl} target="_blank" rel="noreferrer" className="underline">Official leadership source</a> · Watchlist checked {overview.leadership.verifiedAt}. News coverage: English Google News index, latest 90 days; not exhaustive.</p>
+          {overview.leadership.lastScan ? <p className="mb-3 text-sm">Last checked {new Date(overview.leadership.lastScan.at).toLocaleString()} · {overview.leadership.lastScan.stored} new articles saved · {overview.leadership.articles.length} stored articles</p> : <p className="mb-3 text-sm">First leadership check is pending. The scheduled scan will collect public articles.</p>}
+          {!!overview.leadership.lastScan?.errors.length && <p role="status" className="mb-3 text-sm text-amber-800">Some news searches failed. Coverage is incomplete; this does not mean no news. {overview.leadership.lastScan.errors.join('; ')}</p>}
+          <div className="max-h-96 space-y-3 overflow-y-auto">
+            {overview.leadership.articles.map(a => <article key={a.id} className="rounded-lg border border-black/10 p-3">
+              <p className="mb-1 text-xs text-radar">Search for {a.people.join(', ')} · {a.sourceName} · Published {new Date(a.sourceDate).toLocaleDateString()}</p>
+              <a href={a.sourceUrl} target="_blank" rel="noreferrer" className="text-sm font-medium underline">{a.title}</a>
+              <p className="mt-1 text-xs text-black/50">First captured {new Date(a.fetchedAt).toLocaleDateString()} · {a.nameInMetadata ? "Name and company appear in news metadata." : "Name matched by the search index; not verified in article text."} Open the article to verify its claims.</p>
+            </article>)}
+          </div>
+          {!overview.leadership.articles.length && overview.leadership.lastScan && <p className="text-sm text-black/60">No matching articles stored yet. We do not substitute sample stories.</p>}
+          <p className="mt-3 text-xs text-black/50">A new article is a change in coverage, not automatically a risk or endorsement. This section is independent of the audience lens below.</p>
+          <Button variant="secondary" onClick={runScan} disabled={scanning}>{scanning ? 'Checking public sources…' : 'Check public sources now'}</Button>
+          {scanMsg && <p role="status" className="mt-2 text-xs">{scanMsg}</p>}
+        </Card>
+      )}
+
       {!overview ? (
         <div className="space-y-4">
           <Skeleton className="h-40 w-full" />
@@ -304,3 +334,5 @@ export default function RadarPage() {
     </main>
   );
 }
+
+

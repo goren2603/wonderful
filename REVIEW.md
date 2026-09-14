@@ -174,3 +174,25 @@ exactly.
   live-discovered prospect (currently "Add a real target" creates a
   separate prospect row rather than merging into one).
 - Public access auth.
+
+## Independent review — leadership monitoring (2026-09-14)
+
+### CRITICAL
+- No CRM, Growth delivery/reply ingestion or calendar connectors exist. Credentials alone do not implement these workflows. The Growth page now states the implementation and authorization requirements explicitly.
+- Synthetic Radar mentions must never trigger real subscriber emails. The threshold now excludes demo mentions; signal cards also visibly identify synthetic evidence.
+
+### IMPORTANT
+- Implemented seven-person Wonderful leadership watchlist sourced from the official about-us page (verified 2026-09-14), Google News RSS searches, a 90-day publication window, bounded retries/timeouts, URL deduplication, persistent Evidence records and audit scan outcomes. Called by the existing scheduled Radar agent, with no schema migration or private data access.
+- These are public search-index matches, NOT full-article fact verification. UI distinguishes visible name metadata from unverified indexed person matches. Dates come from RSS; first-captured timestamps persist. News volume is not fabricated sentiment or proof of a risk.
+- Existing company news coverage remains limited (Wikipedia/HN failures are surfaced). Leadership news is separate from synthetic trend fixtures and audience lenses.
+- Local provider smoke test returned 11 distinct real indexed articles and no source failures. Parser tests cover company identity, name-match disclosure, dates, unsafe URLs, duplicates and invalid feeds.
+
+### NICE TO HAVE
+- Refresh the sourced leadership watchlist periodically, add Hebrew coverage, and verify named-person context in full articles using a vetted research provider.
+
+### Next Builder Actions
+1. Implement an authorized CRM adapter with customer/open-deal matching and account ownership before claiming CRM-aware discovery; support public-company lookalikes separately from private customer status.
+2. Add Israel enterprise discovery with verifiable sector/scale evidence; do not imply Bezeq or banks are net-new Wonderful accounts without CRM evidence.
+3. Implement email delivery + reply webhooks and calendar free/busy + explicit booking flow before claiming autonomous meetings. Use sandbox accounts first.
+4. Separate all synthetic Radar trends from live management signals by default; improve live evidence classification and historical coverage before claiming sentiment-based alerts.
+5. Add tests for persistent leadership scan dedup and provider outage retention against a disposable PostgreSQL database.

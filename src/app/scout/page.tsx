@@ -260,11 +260,17 @@ export default function ScoutPage() {
     <main className="mx-auto min-h-screen max-w-6xl px-6 py-10">
       <ProductHeader
         name="Growth Agent"
-        tagline="An autonomous outbound business-development agent for Wonderful. It continuously finds real companies, matches them to a Wonderful use case, identifies decision makers, and prepares personalized outreach — you review and approve what goes out."
+        tagline="Scheduled research on real enterprise companies: gather public evidence, look for named decision makers, and prepare outreach for your review."
         accentText="text-scout"
         accentBg="bg-scout-soft"
       />
 
+      <Card className="mb-6 border border-scout/15">
+        <SectionHeading eyebrow="Public-data prototype" title="From research to a booked meeting" />
+        <p className="text-sm text-black/70">Working today: scheduled research on a curated company list, public-source enrichment, outreach drafts when evidence and a contact are available, and manual pipeline tracking.</p>
+        <p className="mt-2 text-sm text-black/70">With authorized CRM access and an implemented connector, the agent could exclude existing customers and open deals, find similar accounts, and assign the right account owner. Customer status is currently unknown.</p>
+        <p className="mt-2 text-sm text-black/70">With email and calendar integrations, it could track replies and propose available meeting times. These connectors are not implemented here; no automatic sending or calendar booking is active. Approval and recipient agreement would still be required.</p>
+      </Card>
       {!summary || !prospects ? (
         <div className="space-y-4">
           <Skeleton className="h-40 w-full" />

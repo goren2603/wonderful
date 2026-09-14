@@ -4,6 +4,7 @@ import { withAgentLease } from '@/lib/agentRuntime';
 import { classifyTheme, analyzeTheme, weekStart } from '@/lib/radarAnalysis';
 import { fetchLiveEvidenceDetailed } from '@/lib/research';
 import { sendEmail } from '@/lib/email';
+import { monitorLeadership } from '@/lib/leadershipMonitor';
 import type { AgentStep } from '@/lib/types';
 
 const SPIKE_THRESHOLD = 5; // real negative mentions in the current calendar week that trigger a subscriber email
@@ -88,6 +89,12 @@ export async function runRadarScan(companyName?:string) {
       const companies=await db.company.findMany({where:companyName?{name:companyName}:undefined});
       if(companyName&&!companies.length) throw new Error('Company not found');
       for(const company of companies) {
+        if (company.isDefault) {
+          const leadership = await monitorLeadership(company.id, run.id);
+          liveFetched += leadership.fetched; liveStored += leadership.stored;
+          sourceErrorCount += leadership.errors.length ? 1 : 0;
+          steps.push({ label: 'Leadership news', detail: `${leadership.fetched} matching news articles; ${leadership.stored} newly stored. ${leadership.errors.length ? `Source errors: ${leadership.errors.join('; ')}` : 'Seven named leaders checked against Google News RSS; title/metadata matching, not full-article verification.'}`, at: new Date().toISOString() });
+        }
         // Every tracked company — including the default "Wonderful", searched
         // as its real domain — gets real live evidence for its own name.
         const searchTerm=company.isDefault?WONDERFUL_SEARCH_TERM:company.name;
@@ -129,7 +136,7 @@ export async function runRadarScan(companyName?:string) {
               await tx.alert.update({where:{id:existing.id},data:{evidenceCount:analysis.evidenceCount,baseline:analysis.baseline,trend:analysis.trendText,state:'RESOLVED',aiExplanation:`Threshold no longer met. ${analysis.explanation}`}});
             }
             const week=weekStart(new Date());
-            const currentWeekNegative=members.filter(m=>m.sentiment==='NEGATIVE'&&weekStart(m.sourceDate).getTime()===week.getTime());
+            const currentWeekNegative=members.filter(m=>!m.isDemo&&m.sentiment==='NEGATIVE'&&weekStart(m.sourceDate).getTime()===week.getTime());
             if(currentWeekNegative.length>=SPIKE_THRESHOLD) spikeCandidates.push({themeId:theme.id,label,members:currentWeekNegative});
           }
           // Preserve old themes/alerts for audit, but remove obsolete memberships. API hides empty clusters.
