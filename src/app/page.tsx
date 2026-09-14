@@ -145,8 +145,8 @@ export default function LauncherPage() {
           const status = statusFor(p.key);
           const isWorking = status?.latestRun?.status === "RUNNING";
           return (
-            <Link key={p.key} href={p.href} className="group block">
-              <Card className="h-full transition group-hover:-translate-y-0.5 group-hover:shadow-lg" padded={false}>
+            <Link key={p.key} href={p.href} className="group flex">
+              <Card className="flex w-full flex-col transition group-hover:-translate-y-0.5 group-hover:shadow-lg" padded={false}>
                 <div className={`rounded-t-xl2 ${p.bg} px-5 py-4`}>
                   <div className="flex items-center justify-between">
                     <span className={`text-sm font-semibold ${p.text}`}>{p.name}</span>
@@ -156,7 +156,7 @@ export default function LauncherPage() {
                     </span>
                   </div>
                 </div>
-                <div className="flex h-full flex-col gap-4 p-5">
+                <div className="flex flex-1 flex-col gap-4 p-5">
                   <p className="text-sm leading-relaxed text-black/60">{p.tagline}</p>
                   <p className="rounded-md bg-black/[0.03] px-2.5 py-2 font-mono text-[10px] leading-relaxed text-black/40">
                     {p.loop}
