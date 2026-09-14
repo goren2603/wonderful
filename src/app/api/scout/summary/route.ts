@@ -27,6 +27,15 @@ export async function GET() {
   const pipelineCounts = Object.fromEntries(PIPELINE_STAGES.map((s) => [s, 0])) as Record<string, number>;
   for (const p of allProspects) pipelineCounts[pipelineStage(p)]++;
 
+  const realOutreach = { prospect: { discoveryMode: { in: REAL_MODES } } };
+  const [job, awaitingApproval, approved, followUpDue, reviewDraft] = await Promise.all([
+    db.scheduledJob.findUnique({ where: { agentKey: 'COMPANY_SCOUT' }, select: { enabled: true, nextRunAt: true, lastStatus: true } }),
+    db.outreachMessage.count({ where: { ...realOutreach, status: 'AWAITING_APPROVAL' } }),
+    db.outreachMessage.count({ where: { ...realOutreach, status: 'APPROVED' } }),
+    db.outreachMessage.count({ where: { ...realOutreach, status: 'FOLLOW_UP_DUE' } }),
+    db.outreachMessage.findFirst({ where: { ...realOutreach, status: 'AWAITING_APPROVAL' }, select: { prospectId: true }, orderBy: { createdAt: 'asc' } }),
+  ]);
+
   return NextResponse.json({
     latestRun,
     stats: {
@@ -38,5 +47,6 @@ export async function GET() {
       meetingsBooked,
     },
     pipelineCounts,
+    nextSteps: { job, awaitingApproval, approved, followUpDue, reviewProspectId: reviewDraft?.prospectId ?? null },
   });
 }

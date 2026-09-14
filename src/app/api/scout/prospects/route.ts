@@ -21,5 +21,9 @@ export async function GET(req: Request) {
     include: { decisionMakers: true, outreach: true },
   });
 
-  return NextResponse.json({ prospects });
+  const evidence = await db.evidence.findMany({
+    where: { entityType: 'PROSPECT', entityId: { in: prospects.map(p => p.id) } },
+    select: { entityId: true, isDemo: true },
+  });
+  return NextResponse.json({ prospects: prospects.map(p => ({ ...p, evidence: evidence.filter(e => e.entityId === p.id).map(e => ({ isDemo: e.isDemo })) })) });
 }

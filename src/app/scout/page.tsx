@@ -9,6 +9,7 @@ import { Card, Badge, Button, SectionHeading, EmptyState, Skeleton, ProgressBar 
 import { COUNTRIES, VERTICALS, type Country, type Vertical } from "@/lib/seedData/prospects";
 import { pipelineStage } from "@/lib/scoutScoring";
 import { PIPELINE_STAGES } from "@/lib/types";
+import { outreachHoldReason } from "@/lib/growthNext";
 
 interface Prospect {
   id: string;
@@ -21,11 +22,41 @@ interface Prospect {
   employeeCountEstimate: string | null;
   whyJson: string;
   outreach: { status: string; channel: string }[];
+  decisionMakers: { name: string | null; isReal: boolean }[];
+  evidence: { isDemo: boolean }[];
 }
 interface Summary {
   latestRun: { startedAt: string; summary: string | null } | null;
   stats: { companiesResearched: number; newQualifiedAccounts: number; decisionMakersIdentified: number; outreachSent: number; replies: number; meetingsBooked: number };
   pipelineCounts: Record<string, number>;
+  nextSteps: {
+    job: { enabled: boolean; nextRunAt: string | null; lastStatus: string | null } | null;
+    awaitingApproval: number; approved: number; followUpDue: number;
+    reviewProspectId: string | null;
+  };
+}
+
+function NextSteps({ summary }: { summary: Summary }) {
+  const next = summary.nextSteps;
+  const job = next.job;
+  const scheduledAt = job?.nextRunAt ? new Date(job.nextRunAt) : null;
+  const schedule = job?.lastStatus === 'RUNNING' ? 'The agent is running now.'
+    : !job?.enabled ? 'Automatic discovery is not enabled.'
+    : !scheduledAt ? 'No next run is scheduled yet.'
+    : scheduledAt.getTime() <= Date.now() ? 'The scheduled run is due; waiting for server dispatch.'
+    : `Next automatic discovery: ${scheduledAt.toLocaleString()}. You do not need to keep this page open.`;
+  return (
+    <Card className="mb-6 border border-scout/15 bg-scout-soft">
+      <SectionHeading eyebrow="Your agent" title="What happens next" />
+      <p className="text-sm font-medium text-black/80">{next.awaitingApproval === 0 ? 'No messages are waiting for approval.' : `${next.awaitingApproval} ${next.awaitingApproval === 1 ? 'message is' : 'messages are'} waiting for your approval.`}</p>
+      {next.approved > 0 && <p className="mt-1 text-sm text-black/65">{next.approved} approved {next.approved === 1 ? 'message needs' : 'messages need'} manual sending and confirmation.</p>}
+      {next.followUpDue > 0 && <p className="mt-1 text-sm text-black/65">{next.followUpDue} {next.followUpDue === 1 ? 'message is' : 'messages are'} marked for follow-up. Follow-ups are handled manually.</p>}
+      <p className="mt-3 text-sm text-black/65">{schedule}</p>
+      {job?.lastStatus === 'FAILED' && <p className="mt-2 text-sm text-amber-800">The last run failed. See the activity log below for details.</p>}
+      {next.reviewProspectId && <Link href={`/scout/${next.reviewProspectId}`} className="mt-3 inline-block text-sm font-semibold text-scout underline">Review a message →</Link>}
+      <p className="mt-3 text-xs text-black/45">Live and manually added accounts only. Approval does not send a message.</p>
+    </Card>
+  );
 }
 
 const STAGE_LABELS: Record<string, string> = {
@@ -241,6 +272,7 @@ export default function ScoutPage() {
         </div>
       ) : (
         <>
+          <NextSteps summary={summary} />
           <TodayStats summary={summary} />
           <div className="mb-8 flex items-center gap-3">
             <Button accent="scout" onClick={runLiveDiscovery} disabled={liveScanning}>{liveScanning ? "Running live discovery…" : "Run live discovery now"}</Button>
@@ -289,6 +321,7 @@ export default function ScoutPage() {
                   {prospects.map((p) => {
                     const why: string[] = JSON.parse(p.whyJson);
                     const awaitingOutreach = p.outreach.some((o) => o.status === "AWAITING_APPROVAL");
+                    const holdReason = outreachHoldReason(p);
                     return (
                       <Link key={p.id} href={`/scout/${p.id}`} className="flex flex-col gap-2 rounded-xl2 border border-black/5 p-4 transition hover:-translate-y-0.5 hover:shadow-md">
                         <div className="flex items-start justify-between">
@@ -303,6 +336,7 @@ export default function ScoutPage() {
                         </div>
                         <ProgressBar value={p.opportunityScore} max={100} colorClass="bg-scout" />
                         <p className="line-clamp-1 text-xs text-black/50">{why[0]}</p>
+                        {holdReason && <p className="rounded-md bg-amber-50 p-2 text-xs leading-relaxed text-amber-900">{holdReason}</p>}
                         <div className="mt-1 flex flex-wrap items-center gap-1.5">
                           <Badge tone="scout">{STAGE_LABELS[pipelineStage(p)]}</Badge>
                           {p.useCase && <Badge tone="neutral">{p.useCase.split(" / ")[0]}</Badge>}
