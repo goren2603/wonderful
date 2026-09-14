@@ -1,5 +1,5 @@
 import { db } from '@/lib/db';
-import { getResearchProvider, fetchLiveEvidenceDetailed, excludeSecurityIncidents } from '@/lib/research';
+import { getResearchProvider, fetchLiveEvidenceDetailed, excludeSecurityIncidents, isSecurityIncident } from '@/lib/research';
 import { findVerifiedExecutiveDetailed } from '@/lib/wikidata';
 import { withAgentLease, retry } from '@/lib/agentRuntime';
 import { scoreCompany, scoreLiveCompany, dedupeCompany } from '@/lib/scoutScoring';
@@ -118,6 +118,15 @@ export async function runLiveGrowthDiscovery(params: LiveDiscoveryParams = {}) {
         const existing = existingFor(company);
         await db.$transaction(async tx => {
           const prospect = existing ?? await tx.prospect.create({ data: { companyName: company.name, dedupeKey: `live::${dedupeCompany(company.name, company.country)}`, country: company.country, vertical: company.vertical, website: company.website, employeeCountEstimate: company.employeeCountEstimate, runId: run.id, discoveryMode: 'live' } });
+          if (existing) {
+            // Prune any security-incident evidence a company already had on
+            // file from before this filter existed — not just excluded from
+            // new fetches, actually removed on the next time this company is
+            // rescanned.
+            const staleEvidence = await tx.evidence.findMany({ where: { entityType: 'PROSPECT', entityId: prospect.id } });
+            const staleIds = staleEvidence.filter(e => isSecurityIncident(e.title, e.snippet)).map(e => e.id);
+            if (staleIds.length) await tx.evidence.deleteMany({ where: { id: { in: staleIds } } });
+          }
           const evidence = [];
           for (const item of items) {
             const previous = await tx.evidence.findFirst({ where: { entityType: 'PROSPECT', entityId: prospect.id, sourceUrl: item.sourceUrl, snippet: item.snippet } });

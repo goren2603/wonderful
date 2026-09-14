@@ -161,8 +161,12 @@ const SECURITY_INCIDENT_PATTERN = /\b(breach(es|ed)?|ransomware|hack(ed|ing)?|ex
  * this filter, since a breach is exactly the kind of signal Radar exists to
  * surface.
  */
+export function isSecurityIncident(title: string, snippet: string): boolean {
+  return SECURITY_INCIDENT_PATTERN.test(title) || SECURITY_INCIDENT_PATTERN.test(snippet);
+}
+
 export function excludeSecurityIncidents(items: EvidenceItem[]): EvidenceItem[] {
-  return items.filter((item) => !SECURITY_INCIDENT_PATTERN.test(item.title) && !SECURITY_INCIDENT_PATTERN.test(item.snippet));
+  return items.filter((item) => !isSecurityIncident(item.title, item.snippet));
 }
 
 // Capability status is about implemented behavior, never merely the presence of a key.
