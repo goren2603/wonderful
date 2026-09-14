@@ -1,6 +1,6 @@
 import { db } from '@/lib/db';
 import { getResearchProvider, fetchLiveEvidenceDetailed, excludeSecurityIncidents } from '@/lib/research';
-import { findVerifiedExecutive } from '@/lib/wikidata';
+import { findVerifiedExecutiveDetailed } from '@/lib/wikidata';
 import { withAgentLease, retry } from '@/lib/agentRuntime';
 import { scoreCompany, scoreLiveCompany, dedupeCompany } from '@/lib/scoutScoring';
 import { COUNTRIES, VERTICALS, SEED_COMPANIES, USE_CASE_BY_VERTICAL, DECISION_MAKER_TITLES_BY_VERTICAL, type Country, type Vertical, type SeedCompany } from '@/lib/seedData/prospects';
@@ -111,9 +111,10 @@ export async function runLiveGrowthDiscovery(params: LiveDiscoveryParams = {}) {
         sourcesChecked += items.length;
         if (sourceErrors.length) { sourceErrorCount++; await step('Source error', `${company.name}: ${sourceErrors.join('; ')} — treat "no evidence" below as inconclusive for this company, not a confirmed negative.`); }
         else await step('Researching', `${company.name}: ${items.length} real evidence item(s) found (Wikipedia, Hacker News).`);
-        const exec = await findVerifiedExecutive(company.name);
+        const { exec, error: execError } = await findVerifiedExecutiveDetailed(company.name);
         if (exec) verifiedContacts++;
-        await step('Verifying contact', `${company.name}: ${exec ? `${exec.name} (${exec.role}) — verified via a structured Wikidata claim.` : 'no verified executive contact found on Wikidata.'}`);
+        if (execError) await step('Verifying contact', `${company.name}: Wikidata lookup failed (${execError}) — inconclusive this run, not treated as "role no longer current."`);
+        else await step('Verifying contact', `${company.name}: ${exec ? `${exec.name} (${exec.role}) — verified via a structured Wikidata claim.` : 'no verified executive contact found on Wikidata.'}`);
         const existing = existingFor(company);
         await db.$transaction(async tx => {
           const prospect = existing ?? await tx.prospect.create({ data: { companyName: company.name, dedupeKey: `live::${dedupeCompany(company.name, company.country)}`, country: company.country, vertical: company.vertical, website: company.website, employeeCountEstimate: company.employeeCountEstimate, runId: run.id, discoveryMode: 'live' } });
@@ -131,7 +132,7 @@ export async function runLiveGrowthDiscovery(params: LiveDiscoveryParams = {}) {
           const why = [
             `${company.employeeCountEstimate} public directory headcount in ${company.country}.`,
             evidence.length ? `${evidence.length} real, live evidence item(s) found — see Evidence below.` : sourceErrors.length ? 'Live sources could not be reached this run (see run steps) — not yet checked, not a confirmed negative.' : 'No real live evidence found for this name (Wikipedia, Hacker News both checked, both empty).',
-            exec ? `Verified contact: ${exec.name} (${exec.role}), currently-holding tenure confirmed via Wikidata.` : 'Current role not verified — Wikidata has no unambiguous current CEO/director claim for this company (either none exists, or multiple past holders with no clear current one). No outreach draft was created for this reason.',
+            exec ? `Verified contact: ${exec.name} (${exec.role}), currently-holding tenure confirmed via Wikidata.` : execError ? `Wikidata lookup failed this run (${execError}) — contact status is unchanged, not re-verified.` : 'Current role not verified — Wikidata has no unambiguous current CEO/director claim for this company (either none exists, or multiple past holders with no clear current one). No outreach draft was created for this reason.',
           ];
           await tx.prospect.update({ where: { id: prospect.id }, data: { opportunityScore: score, scoreBreakdownJson: JSON.stringify(breakdown), useCase: useCase.useCase, useCaseRationale: useCase.rationale, status: existing?.status === 'NEW' ? 'SCORED' : existing?.status ?? 'SCORED', whyJson: JSON.stringify(why), runId: run.id } });
           await tx.scoreHistory.create({ data: { prospectId: prospect.id, score, breakdownJson: JSON.stringify(breakdown) } });
@@ -144,7 +145,11 @@ export async function runLiveGrowthDiscovery(params: LiveDiscoveryParams = {}) {
           // sitting there silently — correct it the same way a human review
           // would: retire the wrong contact and its pending approval, and
           // create the right one (or none, if no current holder is known).
-          const staleDecisionMaker = await tx.decisionMaker.findFirst({ where: { prospectId: prospect.id, isReal: true } });
+          // Only reconcile when this run's lookup actually completed — a
+          // failed/rate-limited request (execError set) must never delete a
+          // previously-verified, still-correct contact just because we
+          // couldn't re-check it this time.
+          const staleDecisionMaker = execError ? null : await tx.decisionMaker.findFirst({ where: { prospectId: prospect.id, isReal: true } });
           if (staleDecisionMaker && staleDecisionMaker.name !== exec?.name) {
             const staleMessages = await tx.outreachMessage.findMany({ where: { decisionMakerId: staleDecisionMaker.id } });
             for (const m of staleMessages) {
