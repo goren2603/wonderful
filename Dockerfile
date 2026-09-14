@@ -7,15 +7,13 @@ COPY prisma ./prisma
 RUN npm ci
 
 COPY . .
-ENV DATABASE_URL="file:/app/data/dev.db"
 RUN npx prisma generate
-RUN mkdir -p /app/data
-RUN DISABLE_SCHEDULER=1 npx next build
+RUN DATABASE_URL="postgresql://build:build@localhost:5432/build" DISABLE_SCHEDULER=1 npx next build
 
 ENV NODE_ENV=production
 EXPOSE 3000
 ENV PORT=3000
 
-# Runs pending migrations against whatever volume is mounted at /app/prisma
-# before starting the server, then seeds only if the database is empty.
+# DATABASE_URL is supplied by the hosting service at runtime.
+# Migrate PostgreSQL and seed only an empty database before serving traffic.
 CMD ["sh", "-c", "npx prisma migrate deploy && node scripts/seed-if-empty.js && npm run start"]
